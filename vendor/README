@@ -1,0 +1,51 @@
+Crates kept here with a change of Swarm's, each with its own licences.
+
+i-slint-backend-android-activity: Slint 1.18.1's Android backend, its
+licences in LICENSES/, with two changes in java/SlintAndroidJavaHelper.java:
+- a keyboard's connection replaced (a field's type changed, as the
+  passphrase's eye does) ends any batch of edits it had begun, so what's
+  typed still reaches the window afterwards;
+- in a password field, what the keyboard is still composing is given to
+  the window as typed, not as a preedit, so a keyboard that composes even
+  in password fields doesn't leave the last word out of the passphrase.
+Test for both: tools/test-android-input.sh, on a phone over adb.
+
+i-slint-core: Slint 1.18.1's core, its licences in LICENSES/, with one
+change in items/text.rs (StyledTextItem::input_event): a press, a move or
+a release that isn't on a link, or isn't the left button's, is passed on
+to what's beneath. A chat line with web addresses lays its links over the
+same text plain (desktop/ui/parts.slint, Links), which can then still be
+dragged over to select it, long-pressed on the phone to copy it, and
+right-clicked for its menu.
+Tests: desktop's a_chat_line_with_a_link_dragged_over_is_copied and
+on_the_phone_a_link_opens_and_its_line_still_copies.
+
+quinn-proto: quinn-proto 0.11.19, its licences in LICENSE-APACHE and
+LICENSE-MIT, with one setting added, TransportConfig::max_probe_interval
+(src/config/transport.rs, used in src/connection/mod.rs's
+pto_time_and_space): the longest an established connection waits between
+probes while what it's sent goes unanswered, however long the round trip's
+been reckoned (never under the quickest seen). Without it QUIC doubles
+the wait after each probe, so a link gone for a few seconds (a Wi-Fi roam)
+and back would go unprobed for seconds more. Swarm sets it in
+core/src/transport.rs. Capped, the wait is counted from the last probe
+timeout as well as from the last ack-eliciting packet
+(Connection::last_pto), so probes never pile up while the socket can't
+take them.
+Tests: core/tests/calls.rs,
+a_call_goes_on_at_its_rate_after_the_link_drops_for_a_moment, and
+src/tests/mod.rs,
+capped_probe_interval_does_not_pile_up_probes_while_nothing_can_be_sent
+(quinn-proto's own tests run from a copy with an empty [workspace] table
+added to its Cargo.toml).
+
+Moving any of them to a newer version: fetch the new release's source
+(`cargo download`, or the .crate from crates.io, unpacked), make a diff
+of the change here against the release it was made on (the old .crate
+unpacked beside it: `diff -ru old vendor/<crate>`, leaving out .cargo-ok,
+.cargo_vcs_info.json and Cargo.toml.orig), apply that diff to the new
+source, put it in place of vendor/<crate>, bump the version named above
+and in the workspace's Cargo.lock (`cargo update -p <crate>`), and run
+the change's tests. Slint's backend and core move with the slint version
+desktop/ and android/ use; check first whether the new release has the
+change already, and if so drop the patch and its [patch.crates-io] line.

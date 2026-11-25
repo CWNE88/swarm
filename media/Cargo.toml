@@ -1,0 +1,33 @@
+[package]
+name = "swarm-media"
+version = "1.0.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+# Video on the graphics chip, for `swarm_core::video::Hardware`: VA-API
+# (Intel's and AMD's) and NVENC/NVDEC (NVIDIA's) on Linux, Media
+# Foundation on Windows, MediaCodec on Android; and what they share
+# (H.264 and H.265 headers, a camera's JPEG on the chip, NV12). Kept
+# apart from `swarm-app` because nearly all of its `unsafe` is here: the
+# systems' C interfaces, loaded at run time where they're there at all.
+# Each platform's part is built only for that platform.
+
+[dependencies]
+swarm-core = { path = "../core" }
+anyhow = "1"
+zune-jpeg = "0.4.21"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+libloading = "0.8"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["Win32_Media_MediaFoundation", "Win32_System_Com", "Win32_System_Variant", "Win32_System_Ole", "Win32_System_Com_StructuredStorage", "Win32_Foundation", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D11", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common"] }
+
+[dev-dependencies]
+openh264 = "0.9.8"
+
+# A stand-in hardware encoder for testing `video_mf` (a COM object of
+# our own needs the crate by name; the version `windows` already uses).
+[target.'cfg(windows)'.dev-dependencies]
+windows-core = "0.62"

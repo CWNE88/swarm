@@ -1,0 +1,25 @@
+[package]
+name = "swarm-android"
+version = "1.0.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+# swarm on Android phones: the library the app (an APK, built by
+# tools/build-android.sh) loads, running the window's controller and node
+# with Android's activity as its window. Empty on other systems.
+[lib]
+name = "swarm"
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[target.'cfg(target_os = "android")'.dependencies]
+swarm-desktop = { path = "../desktop" }
+swarm-app = { path = "../app" }
+swarm-core = { path = "../core" }
+slint = { version = "1", default-features = false, features = ["std", "compat-1-2", "backend-android-activity-06", "renderer-femtovg", "renderer-software"] }
+libc = "0.2"
+# Calling the activity's Java (notifications), from swarm's threads: the
+# versions Slint's backend already uses.
+jni = "0.21"
+ndk-context = "0.1"
+anyhow = "1"

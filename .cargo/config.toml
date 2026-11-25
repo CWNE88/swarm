@@ -1,0 +1,31 @@
+# Cross-compiling for the Raspberry Pi 4 (64-bit Raspberry Pi OS):
+#     cargo build --release --target aarch64-unknown-linux-gnu
+# Needs Debian's arm64 cross toolchain and libraries on the build host:
+#     sudo dpkg --add-architecture arm64
+#     sudo apt install gcc-aarch64-linux-gnu libasound2-dev:arm64 libopus-dev:arm64
+# The pkg-config settings are target-suffixed so native x86 builds are untouched.
+
+[target.aarch64-unknown-linux-gnu]
+linker = "aarch64-linux-gnu-gcc"
+
+[env]
+PKG_CONFIG_ALLOW_CROSS_aarch64_unknown_linux_gnu = "1"
+PKG_CONFIG_PATH_aarch64_unknown_linux_gnu = "/usr/lib/aarch64-linux-gnu/pkgconfig"
+PKG_CONFIG_SYSROOT_DIR_aarch64_unknown_linux_gnu = "/"
+# Windows: see the C++ library note under its target, below.
+CXXSTDLIB_x86_64_pc_windows_gnu = ""
+
+# Cross-compiling for Windows (10 and later): see tools/build-windows.sh,
+# which also builds the Opus library for it first. Needs MinGW-w64:
+#     sudo apt install gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
+#     rustup target add x86_64-pc-windows-gnu
+# Everything is linked in statically, so swarm.exe runs on its own — no
+# DLLs to copy alongside it.
+[target.x86_64-pc-windows-gnu]
+linker = "x86_64-w64-mingw32-gcc"
+# The C++ library (for the OpenH264 video codec) is linked in by hand,
+# statically: left to the `cc` crate it would need libstdc++-6.dll.
+rustflags = ["-C", "target-feature=+crt-static", "-C", "link-arg=-static",
+             "-C", "link-arg=-Wl,--start-group", "-C", "link-arg=-l:libstdc++.a", "-C", "link-arg=-lmingw32",
+             "-C", "link-arg=-lgcc", "-C", "link-arg=-lgcc_eh", "-C", "link-arg=-lmingwex", "-C", "link-arg=-lmsvcrt",
+             "-C", "link-arg=-lkernel32", "-C", "link-arg=-l:libpthread.a", "-C", "link-arg=-Wl,--end-group"]

@@ -1,0 +1,1087 @@
+import { Button, LineEdit, ListView, ScrollView, CheckBox, ComboBox, Palette, ProgressIndicator } from "std-widgets.slint";
+import { Row, ChatLine, Member, CallMember, CodeRead, PostItem, TransferItem, Hint, Detail, Roles, Dim, Tip, HelpLabel, SettingRow, Page, Panel, FieldLine, AddressSetter, Labelled, Tab, CallButton, WhyButton, ChatHeader, ChoiceLine, Answering, Picker, DevicePanel, DeviceCodeCard, CallStage, Avatar, RingAvatar, NoPicture, ContactCode, CodeScanner, Pictured, LevelBar, HintItem, Chat, TypingBox, PostList, Dialog, Tabs, App, FirstRunCard, LockedCard, UnlockCard, WordsCard, SettingsPage, YouEditor, BlockedKeys, TransferList, Asks, Pane, Panes, Setting, Answer, NearbyList, RequestAnswer, TransferAnswer, AvatarStep, SoundStep, NoteKind, RowKind, LineKind, TransferState, PeerState, Controlling, KeyCommand, Typing, HelpList, HelpPage, HelpPicture, QrBig, HelpRow, HelpBlock, HelpKind, FileColumns } from "parts.slint";
+export { PhoneWindow } from "phone.slint";
+export { App, Row, ChatLine, Member, CallMember, PostItem, TransferItem, Hint, Detail, Roles, Pane, Panes, Setting, Answer, RequestAnswer, TransferAnswer, AvatarStep, SoundStep, NoteKind, RowKind, LineKind, TransferState, PeerState, Controlling, KeyCommand, HelpRow, HelpBlock, HelpKind } from "parts.slint";
+
+// Being controlled: a small bar over everything else on the desktop,
+// so it's there whatever's in front (see `control_bar` in `src/lib.rs`).
+// Take back control ends it.
+export component ControlBar inherits Window {
+    in property <string> text;
+    callback stop();
+    title: "Swarm";
+    always-on-top: true;
+    no-frame: true;
+    background: #c0392b;
+    HorizontalLayout {
+        padding-left: 12px; padding-right: 4px; padding-top: 4px; padding-bottom: 4px; spacing: 12px;
+        Text { vertical-alignment: center; text: root.text; color: #ffffff; font-weight: 700; }
+        CallButton { on-dark: true; tone: 1; text: "Take back control"; clicked => { root.stop(); } }
+    }
+}
+
+export component AppWindow inherits Window {
+    title: "Swarm";
+    preferred-width: 1200px;
+    preferred-height: 780px;
+    // What the layout asks of the window, for the tests: the window
+    // manager won't let it be dragged past either.
+    out property <length> layout-min-width: root.min-width;
+    out property <length> layout-max-width: root.max-width;
+    out property <length> layout-max-height: root.max-height;
+    min-width: 760px;
+    min-height: 480px;
+    background: Palette.background;
+    forward-focus: keys;
+    full-screen: video-only && video-shown;
+
+    property <int> theme: App.theme;
+    property <string> suggested: App.suggested;
+    property <Pane> view: App.view;
+    property <bool> ring-shown: App.ask.ring-shown;
+    property <bool> video-shown: App.call.video-shown;
+    property <bool> call-shown: App.call.text != "" || video-shown;
+    property <bool> call-on: App.call.live || video-shown;
+    changed call-on => { Tip.text = ""; }
+    property <bool> stage-buttons: true;
+    property <duration> stage-moved;
+    property <bool> stage-hovered;
+    function stage-shown() { stage-buttons = true; stage-moved = animation-tick(); }
+    property <int> scanned: App.me.scanned-count;
+    changed scanned => { if (App.me.scanned-name != "") { f-name = App.me.scanned-name; } f-address = App.me.scanned-address; f-key = App.me.scanned-key; }
+    changed theme => { Palette.color-scheme = theme == 1 ? ColorScheme.light : theme == 2 ? ColorScheme.dark : ColorScheme.unknown; }
+    init => { Palette.color-scheme = theme == 1 ? ColorScheme.light : theme == 2 ? ColorScheme.dark : ColorScheme.unknown; }
+    changed suggested => { pass = suggested; pass-again = suggested; }
+    property <int> transfer-index;
+
+    property <string> f-name;
+    property <string> f-code;
+    property <CodeRead> code-read: App.read-code(f-code, peer-form == 2 ? App.pd.key : "");
+    changed f-code => {
+        if (code-read.ok) {
+            if (peer-form == 1 && f-name == "") { f-name = code-read.name; }
+            f-address = code-read.address;
+            if (peer-form != 2) { f-key = code-read.key; }
+        }
+    }
+    property <string> f-address;
+    property <string> f-key;
+    property <string> f-cover;
+    property <string> f-receive;
+    property <int> peer-form;
+    property <bool> form-wide: peer-form == 1 || peer-form == 3;
+    changed form-wide => { App.browse(form-wide); }
+    // What the peer form holds, for the tests.
+    out property <string> form-filled: f-name + "|" + f-address + "|" + f-key;
+    property <string> new-name;
+    property <string> restore-words;
+    property <string> pass;
+    property <string> pass-again;
+    property <string> pass-new-again;
+    property <string> draft;
+    property <string> post-draft;
+    property <string> req-name;
+    property <string> group-name;
+    property <int> box-token;
+    property <int> post-token;
+    property <int> page-token;
+    property <int> page-dir;
+    property <int> picking;
+    property <bool> help-big;
+    property <image> help-picture;
+    property <int> want-focus;
+    property <bool> typing;
+    property <bool> post-typing;
+    property <bool> video-only <=> App.video-only;
+    property <bool> hide-self;
+    property <bool> controls-shown: true;
+    property <bool> controlling-shown: video-only && video-shown && (App.call.control-state == Controlling.yes || App.call.control-state == Controlling.paused);
+    property <duration> last-move;
+    property <int> ring-choice;
+    changed ring-shown => { ring-choice = 0; }
+    changed video-shown => { if (!video-shown) { video-only = false; } }
+    changed video-only => { show-controls(); App.keys-changed(); }
+    function show-controls() { controls-shown = true; last-move = animation-tick(); }
+    // A ringing call answered (0 with video, 1 voice only) or refused (2).
+    function ring-act(k: int) { asks.ring-act(k); }
+    // The help shown, for the tests.
+    out property <string> tip: Tip.text;
+    // Settings scrolled down (for the tests: how far).
+    out property <length> settings-scrolled;
+    property <bool> outside: Panes.outside(view);
+    // The open chat scrolled back from the newest, or longer than shows.
+    out property <bool> chat-back;
+    property <bool> chat-over;
+    property <string> chat-note: chat-back ? "scrolled back · PgDn: newer" : chat-over ? "PgUp: older" : "";
+
+    public function focus-keys() { keys.focus(); }
+
+    Rectangle {
+        visible: false; x: 0; y: 0; width: 0; height: 0;
+        tabs-measure := Tabs { view: view; }
+        progress-measure := HorizontalLayout { Text { text: App.top.progress-what; } FileColumns { } }
+        call-measure := Text { text: App.call.text + (App.call.live ? "  microphone off  camera off" : ""); font-weight: 700; }
+    }
+    property <length> top-needed: 60px + (App.call.text != "" ? call-measure.preferred-width + 10px : 0px)
+        + (App.top.progress-what != "" ? progress-measure.preferred-width + 100px : 0px) + tabs-measure.preferred-width;
+    property <bool> two-rows: root.width < top-needed;
+
+    function open-peer-form(edit: bool) {
+        f-code = "";
+        if (edit) { f-name = App.pd.name; f-address = App.pd.address; f-key = App.pd.key; f-cover = App.pd.cover-setting; f-receive = App.pd.receive; peer-form = 2; }
+        else if (App.pd.request) {
+            f-name = App.req.suggested; f-address = App.req.address == "unknown" ? "" : App.req.address; f-key = App.req.key; f-cover = ""; peer-form = 1;
+        }
+        else { f-name = ""; f-address = ""; f-key = ""; f-cover = ""; peer-form = 1; }
+    }
+    // A new group, open, with the picker up to put people in it.
+    function new-group() {
+        App.new-group(); picking = 2;
+    }
+    // A way to add, chosen at the end of a section in Contacts (its
+    // key, as sidebar.rs's Adding has it).
+    function add-chosen(key: string) {
+        peer-form = 0;
+        if (key == "contact") { f-code = ""; f-name = ""; f-address = ""; f-key = ""; f-cover = ""; peer-form = 1; }
+        else if (key == "follow") { f-code = ""; f-address = ""; f-key = ""; peer-form = 3; }
+        else if (key == "new-group") { new-group(); }
+        else if (key == "device") { App.show-device-code(true); }
+        focus-keys();
+    }
+    function go(v: Pane) {
+        peer-form = 0;
+        App.show-view(v);
+        focus-keys();
+    }
+
+    // A key, as the terminal UI takes it — pressed, or a hint clicked:
+    // what it does for what's showing is desktop/src/keys.rs's to say,
+    // `run`'s to do. True if it was taken.
+    function press-key(text: string) -> bool {
+        if (video-only && video-shown) { show-controls(); }
+        if (App.qr-big != 0 && text == Key.Escape) { App.qr-big = 0; return true; }
+        return run(App.command-for(text));
+    }
+
+    function run(c: KeyCommand) -> bool {
+        if (c == KeyCommand.none) { return false; }
+        if (c == KeyCommand.swallow) { return true; }
+        if (c == KeyCommand.ring-left) { ring-choice = max(0, ring-choice - 1); }
+        else if (c == KeyCommand.ring-right) { ring-choice = min(App.ask.ring-video ? 2 : 1, ring-choice + 1); }
+        else if (c == KeyCommand.ring-chosen) { ring-act(App.ask.ring-video ? ring-choice : ring-choice + 1); }
+        else if (c == KeyCommand.answer-video) { App.answer(true); }
+        else if (c == KeyCommand.answer-voice) { App.answer(false); }
+        else if (c == KeyCommand.reject-call) { App.reject-call(); }
+        else if (c == KeyCommand.allow-control) { App.answer-control(true); }
+        else if (c == KeyCommand.refuse-control) { App.answer-control(false); }
+        else if (c == KeyCommand.accept-offer) { App.offer(Answer.yes); }
+        else if (c == KeyCommand.decline-offer) { App.offer(Answer.no); }
+        else if (c == KeyCommand.offer-later) { App.offer(Answer.later); }
+        else if (c == KeyCommand.yes) { App.confirm(true); }
+        else if (c == KeyCommand.block) { App.confirm-block(); }
+        else if (c == KeyCommand.no) { App.confirm(false); }
+        else if (c == KeyCommand.video-back) { video-only = false; }
+        else if (c == KeyCommand.leave-video-only) { video-only = false; }
+        else if (c == KeyCommand.video-only) { video-only = true; }
+        else if (c == KeyCommand.big-screen) { video-only = !video-only; }
+        else if (c == KeyCommand.hide-self) { hide-self = !hide-self; }
+        else if (c == KeyCommand.mute) { App.toggle-mute(); }
+        else if (c == KeyCommand.camera) { App.toggle-camera(); }
+        else if (c == KeyCommand.share-screen) { App.toggle-screen(); }
+        else if (c == KeyCommand.hang-up) { App.hang-up(); }
+        else if (c == KeyCommand.call) { App.place-call(false); }
+        else if (c == KeyCommand.video-call) { App.place-call(true); }
+        else if (c == KeyCommand.preview) {
+            if (App.preview-shown) { App.preview(false); } else { go(Pane.settings); App.preview(true); }
+        }
+        else if (c == KeyCommand.close-preview) { App.preview(false); }
+        else if (c == KeyCommand.back && help-big) { help-big = false; }
+        else if (c == KeyCommand.back) { peer-form = 0; App.escape(); }
+        else if (c == KeyCommand.unfollow) { App.unfollow(); }
+        else if (c == KeyCommand.add-request) { App.add-request(req-name == "" ? App.req.suggested : req-name); req-name = ""; }
+        else if (c == KeyCommand.dismiss-request) { App.request(RequestAnswer.dismiss); }
+        else if (c == KeyCommand.block-request) { App.request(RequestAnswer.block); }
+        else if (c == KeyCommand.follow-form) { f-code = ""; f-address = ""; f-key = ""; peer-form = 3; }
+        else if (c == KeyCommand.add-form) { open-peer-form(false); }
+        else if (c == KeyCommand.edit-form) { open-peer-form(true); }
+        else if (c == KeyCommand.remove-peer) { App.remove-peer(); }
+        else if (c == KeyCommand.cycle-answer) { App.cycle-answer(); }
+        else if (c == KeyCommand.remove-device) { App.device-remove(); }
+        else if (c == KeyCommand.toggle-relay) { App.device-relay(!App.dd.relay); }
+        else if (c == KeyCommand.new-group) { new-group(); }
+        else if (c == KeyCommand.add-people) { picking = view == Pane.peer ? 3 : 2; }
+        else if (c == KeyCommand.transfer-up) { transfer-index = max(0, transfer-index - 1); }
+        else if (c == KeyCommand.transfer-down) { transfer-index = min(App.transfers.length - 1, transfer-index + 1); }
+        else if (c == KeyCommand.accept-transfer) { App.transfer(transfer-index, TransferAnswer.accept); }
+        else if (c == KeyCommand.decline-transfer) { App.transfer(transfer-index, TransferAnswer.decline); }
+        else if (c == KeyCommand.cancel-transfer) { App.transfer(transfer-index, TransferAnswer.cancel); }
+        else if (c == KeyCommand.up) { App.move(-1); }
+        else if (c == KeyCommand.down) { App.move(1); }
+        else if (c == KeyCommand.write) { box-token += 1; }
+        else if (c == KeyCommand.post-box) { post-token += 1; }
+        else if (c == KeyCommand.switch-tab) {
+            if (!keys.has-focus) { return false; }
+            App.set-tab(1 - App.peer.tab);
+        }
+        else if (c == KeyCommand.page-up) { page-dir = -1; page-token += 1; }
+        else if (c == KeyCommand.page-down) { page-dir = 1; page-token += 1; }
+        else if (c == KeyCommand.new-post) { want-focus = 1; App.new-post(); if (view == Pane.mine) { post-token += 1; } }
+        else if (c == KeyCommand.refresh) { App.refresh(); }
+        else if (c == KeyCommand.send-file) { App.send-file(); }
+        else if (c == KeyCommand.next-timer) { App.next-timer(); }
+        else if (c == KeyCommand.narrow) { App.narrow-list(!App.list-narrow); }
+        else if (c == KeyCommand.peers) { go(Pane.peers); }
+        else if (c == KeyCommand.chats) { go(Pane.mine); }
+        else if (c == KeyCommand.channels) { go(Pane.channels); }
+        else if (c == KeyCommand.transfers) { go(Pane.transfers); }
+        else if (c == KeyCommand.settings) { go(Pane.settings); }
+        else if (c == KeyCommand.help) { go(Pane.help); }
+        else if (c == KeyCommand.help-up) { App.help-step(-1); }
+        else if (c == KeyCommand.help-down) { App.help-step(1); }
+        else if (c == KeyCommand.quit) { App.quit(); }
+        return true;
+    }
+
+    keys := FocusScope {
+        capture-key-pressed(event) => {
+            App.used();
+            return reject;
+        }
+        key-pressed(event) => {
+            if (controlling-shown) { App.control-key(event.text, true); return accept; }
+            if (event.modifiers.control && event.text == "q") { App.quit(); return accept; }
+            if (event.modifiers.control && (event.text == "=" || event.text == "+")) { App.text-size(1); return accept; }
+            if (event.modifiers.control && event.text == "-") { App.text-size(-1); return accept; }
+            if (event.modifiers.control && event.text == "0") { App.text-size(0); return accept; }
+            if (event.modifiers.control || event.modifiers.alt) { return reject; }
+            return press-key(event.text) ? accept : reject;
+        }
+        key-released(event) => {
+            if (controlling-shown) { App.control-key(event.text, false); return accept; }
+            return reject;
+        }
+
+        VerticalLayout {
+            Rectangle { height: 38px; HorizontalLayout {
+                x: 0; y: 0;
+                width: parent.width; height: parent.height;
+                padding-left: 10px; padding-right: 12px; spacing: 10px;
+                if !two-rows && !outside: Tabs {
+                    view: view;
+                    go(v) => { go(v); }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                if App.call.text != "": Text { text: App.call.text; color: App.call.live ? Roles.status(NoteKind.success) : Roles.status(NoteKind.warning); font-weight: 700; vertical-alignment: center; }
+                if App.call.live: Text { text: App.call.muted ? "microphone off" : "microphone on"; color: App.call.muted ? Roles.status(NoteKind.warning) : Dim.text; font-weight: App.call.muted ? 700 : 400; vertical-alignment: center; }
+                if App.call.live: Text { text: App.call.local-on ? "camera on" : "camera off"; color: Dim.text; vertical-alignment: center; }
+                if App.call.controlled-by != "": Text { text: App.call.controlled-by + (App.call.control-paused ? " is paused while you use your mouse" : " is controlling your screen"); color: Roles.status(NoteKind.error); font-weight: 700; vertical-alignment: center; }
+                if App.call.controlled-by != "": Button { text: "Take back control"; clicked => { App.stop-control(); focus-keys(); } }
+                if App.top.progress-what != "": HorizontalLayout {
+                    spacing: 6px; horizontal-stretch: 0;
+                    ProgressIndicator { width: 80px; height: 6px; y: (parent.height - self.height) / 2; progress: App.top.progress; }
+                    Text { text: App.top.progress-what; color: Dim.text; vertical-alignment: center; }
+                    FileColumns { }
+                }
+            } }
+            Rectangle { height: two-rows && !outside ? 34px : 0px; clip: true; if two-rows && !outside: HorizontalLayout {
+                x: 0; y: 0;
+                width: parent.width; height: parent.height;
+                padding-left: 10px; padding-right: 12px; alignment: start;
+                Tabs {
+                    view: view;
+                    go(v) => { go(v); }
+                }
+            } }
+            Rectangle { height: 1px; background: Dim.rule; }
+
+            main := Rectangle {
+                vertical-stretch: 1;
+                property <length> by-window: max(150px, min(240px, self.width * 0.28));
+                property <length> widest: max(150px, self.width * 0.5);
+                property <length> chosen: App.list-width > 0 ? min(max(150px, App.list-width), widest) : by-window;
+                property <bool> dragging;
+                property <length> drag-width;
+                property <length> drag-from;
+                property <length> drag-start;
+                property <bool> narrow: dragging ? drag-width < 110px : App.list-narrow;
+                property <length> list-width: outside ? 0px : narrow ? 64px : dragging ? min(max(150px, drag-width), widest) : chosen;
+                changed narrow => { Tip.text = ""; }
+                if main.list-width > 0: Rectangle {
+                    x: 0; y: 0; width: main.list-width; height: main.height;
+                    background: Palette.alternate-background;
+                    VerticalLayout {
+                    if view == Pane.help && !main.narrow && App.help-version != "": Text {
+                        text: App.help-version;
+                        height: 26px;
+                        horizontal-alignment: center; vertical-alignment: center; overflow: elide;
+                        font-size: 11px;
+                        color: Dim.text;
+                    }
+                    if view == Pane.help: HelpList { vertical-stretch: 1; narrow: main.narrow; chosen => { focus-keys(); } }
+                    if view != Pane.help: ListView {
+                        vertical-stretch: 1;
+                        for row[i] in App.rows: Rectangle {
+                            property <bool> next-inner: i + 1 < App.rows.length && App.rows[i + 1].inner;
+                            height: row.kind == RowKind.heading ? (main.narrow ? 22px : 30px) : row.inner ? 36px : row.kind == RowKind.add ? 34px : 56px;
+                            background: row.selected ? Palette.selection-background : area.has-hover ? Palette.foreground.transparentize(93%) : transparent;
+                            if !main.narrow && row.kind == RowKind.you && next-inner: Rectangle { x: 33px; y: 52px; width: 1px; height: parent.height - 52px; background: Dim.tree; }
+                            if !main.narrow && row.inner: Rectangle { x: 33px; y: 0; width: 1px; height: next-inner ? parent.height : parent.height / 2; background: Dim.tree; }
+                            if !main.narrow && row.inner: Rectangle { x: 33px; y: parent.height / 2; width: 10px; height: 1px; background: Dim.tree; }
+                            if !main.narrow: HorizontalLayout {
+                                padding-left: row.inner ? 46px : 10px; padding-right: 10px; spacing: 8px;
+                                if row.kind == RowKind.heading: Text { text: row.mark; color: Dim.text; font-size: 11px; vertical-alignment: bottom; }
+                                if row.kind == RowKind.heading: Text { text: row.name; color: Dim.text; font-size: 11px; font-weight: 700; vertical-alignment: bottom; }
+                                if row.kind == RowKind.heading: Text { text: row.tag; color: Dim.text; font-size: 11px; vertical-alignment: bottom; horizontal-stretch: 1; }
+                                if row.kind == RowKind.add: Text {
+                                    width: row.inner ? 10px : 48px; horizontal-alignment: center; vertical-alignment: center;
+                                    text: "+"; font-size: row.inner ? 15px : 18px; color: Palette.accent-background;
+                                }
+                                if row.kind == RowKind.add: Text {
+                                    text: row.name; vertical-alignment: center; horizontal-stretch: 1; overflow: elide;
+                                    color: area.has-hover ? Palette.foreground : Palette.accent-background;
+                                }
+                                if row.kind == RowKind.device: Rectangle {
+                                    width: 10px; height: 10px; y: (parent.height - self.height) / 2; border-radius: 5px;
+                                    background: row.ring == 1 ? Roles.status(NoteKind.success) : Dim.text;
+                                }
+                                if row.kind != RowKind.heading && row.kind != RowKind.add && row.kind != RowKind.device: RingAvatar {
+                                    y: (parent.height - self.height) / 2;
+                                    source: App.row-pictures[i].picture; pictured: App.row-pictures[i].shown; letter: row.letter; ring: row.ring;
+                                    width: 48px;
+                                }
+                                if row.kind != RowKind.heading && row.kind != RowKind.add: VerticalLayout {
+                                    alignment: center; spacing: row.inner ? 0px : 1px; horizontal-stretch: 1;
+                                    Text {
+                                        text: row.name; overflow: elide;
+                                        color: row.selected ? Palette.selection-foreground : row.dim ? Dim.text : Palette.foreground;
+                                        font-weight: row.selected || row.unread > 0 || row.kind == RowKind.you ? 700 : 400;
+                                    }
+                                    Text { text: row.sub; overflow: elide; font-size: 10px; color: row.selected ? Palette.selection-foreground : Dim.text; }
+                                }
+                                if row.unread > 0: Text { text: row.unread; font-weight: 700; vertical-alignment: center; color: row.selected ? Palette.selection-foreground : Roles.status(NoteKind.warning); }
+                            }
+                            if main.narrow: Rectangle {
+                                if row.kind == RowKind.heading: Rectangle { y: parent.height / 2; width: 28px; height: 1px; background: Dim.tree; }
+                                if row.kind == RowKind.add: Text { text: "+"; font-size: row.inner ? 15px : 18px; color: Palette.accent-background; }
+                                if row.kind == RowKind.device: Rectangle {
+                                    width: 10px; height: 10px; border-radius: 5px;
+                                    background: row.ring == 1 ? Roles.status(NoteKind.success) : Dim.text;
+                                }
+                                if row.kind != RowKind.heading && row.kind != RowKind.add && row.kind != RowKind.device: RingAvatar {
+                                    source: App.row-pictures[i].picture; pictured: App.row-pictures[i].shown; letter: row.letter; ring: row.ring;
+                                    width: 44px;
+                                }
+                                if row.unread > 0: Rectangle {
+                                    x: parent.width / 2 + 8px; y: 4px; height: 16px; width: max(16px, count.preferred-width + 8px);
+                                    border-radius: 8px; background: Roles.status(NoteKind.warning);
+                                    count := Text { text: row.unread; font-size: 10px; font-weight: 700; color: #ffffff; }
+                                }
+                            }
+                            area := TouchArea {
+                                changed has-hover => {
+                                    if (main.narrow && self.has-hover && row.kind != RowKind.heading) {
+                                        Tip.x = main.list-width - 8px;
+                                        Tip.below = self.absolute-position.y + self.height / 2 - 10px;
+                                        Tip.above = self.absolute-position.y;
+                                        Tip.text = row.name;
+                                    } else if (!self.has-hover && Tip.text == row.name) {
+                                        Tip.text = "";
+                                    }
+                                }
+                                clicked => {
+                                    if row.kind == RowKind.add { add-chosen(row.mark); return; }
+                                    if row.kind != RowKind.heading { peer-form = 0; transfer-index = 0; }
+                                    App.select(i); focus-keys();
+                                }
+                            }
+                        }
+                    }
+                    if App.call-details.length > 0 && !main.narrow: Rectangle { height: 1px; background: Dim.rule; }
+                    if App.call-details.length > 0 && !main.narrow: VerticalLayout {
+                        padding: 10px; padding-top: 8px; spacing: 3px;
+                        Text { text: "CALL"; color: Dim.text; font-size: 11px; font-weight: 700; }
+                        for d in App.call-details: VerticalLayout {
+                            Text { text: d.label; color: Dim.text; font-size: 11px; }
+                            Text { text: d.value; font-size: 12px; wrap: word-wrap; }
+                        }
+                    }
+                    }
+                }
+                if main.list-width > 0: Rectangle { x: main.list-width; y: 0; width: 1px; height: main.height; background: Dim.rule; }
+
+                VerticalLayout {
+                    x: main.list-width > 0 ? main.list-width + 1px : 0px; y: 0;
+                    width: main.width - self.x; height: main.height;
+                    padding: 10px; padding-top: 8px; spacing: 6px;
+
+                    if call-shown: Panel {
+                        title: !call-on ? "calling" : video-shown ? "video" : "call"; detail: App.call.video-info;
+                        title-colour: App.call.live ? Roles.status(NoteKind.success) : Roles.status(NoteKind.warning);
+                        frame-colour: App.call.live ? Roles.status(NoteKind.success) : Roles.status(NoteKind.warning);
+                        vertical-stretch: video-shown ? 3 : 1;
+                        min-height: video-shown ? 220px : 180px;
+                        inner: 8px;
+                        Rectangle {
+                            background: #000000;
+                            clip: true;
+                            CallStage { width: parent.width; height: parent.height; }
+                            if call-on && !hide-self && App.strip.length == 0: Rectangle {
+                                width: min(parent.width / 4, parent.height / 3 * 16 / 9);
+                                height: self.width * 9 / 16;
+                                x: parent.width - self.width - 10px; y: 10px;
+                                background: #202020;
+                                border-width: 1px; border-color: #ffffff60;
+                                if App.call.local-on || App.call.sharing: Image { source: App.local-frame; image-fit: contain; width: parent.width; height: parent.height; }
+                                if !App.call.local-on && !App.call.sharing: NoPicture { note: App.me.pictured ? "" : "camera off"; avatar: App.my-avatar; pictured: App.me.pictured; width: parent.width; height: parent.height; }
+                                LevelBar { x: 4px; y: parent.height - 7px; width: parent.width - 8px; on-dark: true; level: App.own-level; }
+                            }
+                            if !video-shown && App.call-members.length > 0: Rectangle {
+                                x: 10px; y: 10px; width: members-column.preferred-width + 16px; height: members-column.preferred-height + 12px;
+                                background: #00000090; border-radius: 4px;
+                                members-column := VerticalLayout {
+                                    padding: 6px; padding-left: 8px; padding-right: 8px; spacing: 4px;
+                                    for m[i] in App.call-members: HorizontalLayout {
+                                        spacing: 8px;
+                                        VerticalLayout {
+                                            spacing: 3px; alignment: center;
+                                            Text { text: (m.number > 0 ? m.number + " " : "") + m.name; color: #ffffff; font-weight: m.talking ? 700 : 400; }
+                                            LevelBar { width: 80px; on-dark: true; level: App.member-levels[i]; }
+                                        }
+                                        if m.removable: CallButton { on-dark: true; sides: 8px; text: "Remove"; clicked => { App.remove-from-call(m.number); focus-keys(); } }
+                                    }
+                                }
+                            }
+                            TouchArea {
+                                changed mouse-x => { stage-shown(); }
+                                changed mouse-y => { stage-shown(); }
+                                clicked => { stage-shown(); }
+                                double-clicked => { if (video-shown) { video-only = true; focus-keys(); } }
+                            }
+                            Timer {
+                                interval: 500ms; running: video-shown && stage-buttons;
+                                triggered => { if (!stage-hovered && animation-tick() - stage-moved > 3s) { stage-buttons = false; } }
+                            }
+                            if !video-shown || stage-buttons: Rectangle {
+                                x: (parent.width - self.width) / 2; y: parent.height - self.height - 12px;
+                                width: min(parent.width - 16px, stage-row.preferred-width + 20px); height: 30px + 16px;
+                                background: #000000b0; border-radius: 8px;
+                                TouchArea {
+                                    changed has-hover => { stage-hovered = self.has-hover; }
+                                    stage-row := HorizontalLayout {
+                                        padding: 8px; spacing: 6px; alignment: center;
+                                        if call-on: CallButton { on-dark: true; sides: 10px; text: "Microphone"; shortcut: "m"; tone: App.call.muted ? 0 : 3; clicked => { App.toggle-mute(); focus-keys(); } }
+                                        if call-on: CallButton { on-dark: true; sides: 10px; text: "Camera"; shortcut: "w"; tone: App.call.local-on ? 3 : 0; why: App.call.can-camera || App.call.local-on ? "" : "A conference's video is started by whoever began it."; clicked => { App.toggle-camera(); focus-keys(); } }
+                                        if call-on: CallButton { on-dark: true; sides: 10px; text: "Share screen"; shortcut: "e"; tone: App.call.sharing ? 3 : 0; why: App.call.can-camera || video-shown ? "" : "A conference's video is started by whoever began it."; clicked => { App.toggle-screen(); focus-keys(); } }
+                                        if call-on && (App.call.can-control || App.call.control-state != Controlling.no): CallButton {
+                                            on-dark: true; sides: 10px;
+                                            text: "Control"; tone: App.call.control-state == Controlling.asking ? 1 : App.call.control-state != Controlling.no ? 3 : 0;
+                                            clicked => { if (App.call.control-state == Controlling.no) { video-only = true; } App.toggle-control(); focus-keys(); }
+                                        }
+                                        if call-on && App.addable.length > 0: CallButton { on-dark: true; sides: 10px; text: "Invite…"; clicked => { picking = 1; } }
+                                        if call-on: CallButton { on-dark: true; sides: 10px; text: "File"; clicked => { App.send-file(); focus-keys(); } }
+                                        if video-shown: CallButton { on-dark: true; sides: 10px; text: "Full screen"; shortcut: "v"; clicked => { video-only = true; focus-keys(); } }
+                                        CallButton { on-dark: true; sides: 10px; text: "End call"; tone: 2; shortcut: "h"; clicked => { App.hang-up(); focus-keys(); } }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if view == Pane.mine: VerticalLayout {
+                        spacing: 6px; vertical-stretch: 2;
+                        Panel {
+                            title: "Your posts · anyone"; detail: App.me.followers-text;
+                            vertical-stretch: 1;
+                            PostList { posts: App.my-public; empty: "nothing yet — n to write one"; key-given-back(key) => { focus-keys(); if (key != "") { press-key(key); } } }
+                        }
+                        Panel {
+                            title: "Your posts · contacts only";
+                            vertical-stretch: 1;
+                            PostList { posts: App.my-private; empty: "nothing yet — n to write one"; key-given-back(key) => { focus-keys(); if (key != "") { press-key(key); } } }
+                        }
+                        VerticalLayout {
+                            spacing: 6px; vertical-stretch: 0;
+                            post-box := TypingBox {
+                                title: "New post"; placeholder: "n to write a post"; enter-sends: false; lines-high: 100px;
+                                text <=> post-draft; focus-token: post-token;
+                                changed typing => { root.post-typing = self.typing; }
+                                done-typing => { focus-keys(); }
+                            }
+                            HorizontalLayout {
+                                spacing: 6px; alignment: end; vertical-stretch: 0;
+                                Button { text: "Post to contacts"; enabled: post-draft != ""; clicked => { App.post(post-draft, false); post-draft = ""; focus-keys(); } }
+                                Button { text: "Post to anyone"; enabled: post-draft != ""; clicked => { App.post(post-draft, true); post-draft = ""; focus-keys(); } }
+                            }
+                        }
+                    }
+
+                    if view == Pane.peer: VerticalLayout {
+                        spacing: 6px; vertical-stretch: 2;
+                        ChatHeader {
+                            name: App.peer.name; name-colour: Roles.colour(1);
+                            picture: App.peer-avatar; pictured: App.peer.pictured; says: App.peer.says;
+                            detail: (App.peer.state == PeerState.online ? "● " : "○ ") + App.peer.status;
+                            detail-colour: App.peer.state == PeerState.online ? Roles.status(NoteKind.success) : App.peer.state == PeerState.not-added || App.peer.state == PeerState.removed ? Roles.status(NoteKind.warning) : Dim.text;
+                            if App.peer.state != PeerState.removed && App.call.text == "": WhyButton { text: "Call"; why: App.call.call-why; clicked => { App.place-call(false); focus-keys(); } }
+                            if App.peer.state != PeerState.removed && App.call.text == "": WhyButton { text: "Video call"; why: App.call.video-why; clicked => { App.place-call(true); focus-keys(); } }
+                            if App.peer.state != PeerState.removed && App.call.add-to-call != "": WhyButton { text: "Add to call"; why: App.call.call-why; clicked => { App.place-call(false); focus-keys(); } }
+                            if App.peer.state != PeerState.removed: Button { text: "Send a file"; clicked => { App.send-file(); focus-keys(); } }
+                            if App.peer.state != PeerState.removed: Button { text: "Add people…"; clicked => { picking = 3; } }
+                        }
+                        Panel {
+                            vertical-stretch: 1;
+                            tabs: ["Chat", "Posts"]; tab: App.peer.tab; marked: App.peer.new-posts ? 1 : -1;
+                            tab-clicked(t) => { App.set-tab(t); focus-keys(); }
+                            note: App.peer.tab == 0 ? chat-note : "";
+                            note-colour: chat-back ? Roles.status(NoteKind.warning) : Dim.text;
+                            inner: 6px;
+                            if App.peer.tab == 0: Chat {
+                                lines: App.lines; widest-name: App.chat.widest-name; show-times: App.chat.show-times; empty: App.chat.empty; key: App.chat.key;
+                                page-token: page-token; page-dir: page-dir;
+                                key-given-back(key) => { focus-keys(); if (key != "") { press-key(key); } }
+                                init => { root.chat-back = self.scrolled-back; root.chat-over = self.overflows; }
+                                changed scrolled-back => { root.chat-back = self.scrolled-back; }
+                                changed overflows => { root.chat-over = self.overflows; }
+                            }
+                            if App.peer.tab == 1: VerticalLayout {
+                                spacing: 8px; padding: 4px;
+                                HorizontalLayout {
+                                    Text { text: "for anyone"; font-weight: 700; vertical-alignment: center; horizontal-stretch: 1; }
+                                    Button { text: "Refresh"; clicked => { App.refresh(); focus-keys(); } }
+                                }
+                                PostList { vertical-stretch: 1; posts: App.public-posts; note: App.peer.posts-note; empty: "no public posts"; key-given-back(key) => { focus-keys(); if (key != "") { press-key(key); } } }
+                                Rectangle { height: 1px; background: Dim.rule; }
+                                Text { text: "for contacts"; font-weight: 700; }
+                                PostList { vertical-stretch: 1; posts: App.private-posts; empty: "none for you to see"; key-given-back(key) => { focus-keys(); if (key != "") { press-key(key); } } }
+                            }
+                        }
+                        if App.peer.state == PeerState.removed: HorizontalLayout {
+                            spacing: 6px; vertical-stretch: 0;
+                            Text { text: App.peer.name + " has removed you."; vertical-alignment: center; color: Roles.status(NoteKind.warning); }
+                            Rectangle { horizontal-stretch: 1; }
+                            Button { text: "OK"; clicked => { App.remove-peer(); focus-keys(); } }
+                        }
+                        if App.peer.tab == 0 && App.peer.state != PeerState.removed: TypingBox {
+                            title: "Message"; placeholder: "Enter to write to " + App.peer.name;
+                            focus-token: box-token; text <=> draft;
+                            changed typing => { root.typing = self.typing; }
+                            send(t) => { App.send(t); } done-typing => { focus-keys(); } tab-pressed => { App.set-tab(1); focus-keys(); }
+                            complete(t) => { return App.complete-name(t); }
+                        }
+                    }
+
+                    if view == Pane.channel: chan := HorizontalLayout {
+                        spacing: 0px; vertical-stretch: 2;
+                        property <length> widest: max(150px, (main.width - main.list-width) * 0.5);
+                        property <length> chosen: App.members-width > 0 ? min(max(150px, App.members-width), widest) : 210px;
+                        property <bool> dragging;
+                        property <length> drag-width;
+                        property <length> drag-from;
+                        property <length> drag-start;
+                        property <bool> folded: dragging ? drag-width < 110px : App.members-hidden;
+                        property <length> members-width: dragging ? min(max(150px, drag-width), widest) : chosen;
+                        VerticalLayout {
+                            spacing: 6px;
+                            ChatHeader {
+                                name: App.channel.name;
+                                detail: App.channel.detail;
+                                Button { text: "Call"; clicked => { App.place-call(false); focus-keys(); } }
+                                Button { text: "Add people…"; clicked => { picking = 2; } }
+                                Button { text: "Catch up"; clicked => { App.refresh(); focus-keys(); } }
+                                Button { text: "Details"; clicked => { go(Pane.peers); } }
+                            }
+                            Panel {
+                                vertical-stretch: 1;
+                                note: chat-note;
+                                note-colour: chat-back ? Roles.status(NoteKind.warning) : Dim.text;
+                                inner: 6px;
+                                Chat {
+                                    lines: App.lines; widest-name: App.chat.widest-name; show-times: App.chat.show-times; empty: App.chat.empty; key: App.chat.key;
+                                    page-token: page-token; page-dir: page-dir;
+                                    key-given-back(key) => { focus-keys(); if (key != "") { press-key(key); } }
+                                    init => { root.chat-back = self.scrolled-back; root.chat-over = self.overflows; }
+                                    changed scrolled-back => { root.chat-back = self.scrolled-back; }
+                                    changed overflows => { root.chat-over = self.overflows; }
+                                }
+                            }
+                            TypingBox {
+                                title: "Message"; placeholder: "Enter to write to " + App.channel.name;
+                                focus-token: box-token; text <=> draft;
+                                changed typing => { root.typing = self.typing; }
+                                send(t) => { App.send(t); } done-typing => { focus-keys(); }
+                                complete(t) => { return App.complete-name(t); }
+                            }
+                        }
+                        Rectangle {
+                            width: 9px;
+                            line := TouchArea {
+                                mouse-cursor: col-resize;
+                                pointer-event(e) => {
+                                    if (e.button == PointerEventButton.left && e.kind == PointerEventKind.down) {
+                                        chan.drag-width = chan.folded ? 0px : chan.members-width;
+                                        chan.drag-from = chan.drag-width;
+                                        chan.drag-start = self.absolute-position.x + self.mouse-x;
+                                        chan.dragging = true;
+                                    } else if (e.button == PointerEventButton.left && e.kind == PointerEventKind.up && chan.dragging) {
+                                        chan.dragging = false;
+                                        if (chan.drag-width < 110px) { App.hide-members(true); }
+                                        else if (abs(chan.drag-width - chan.drag-from) > 0px || App.members-hidden) {
+                                            App.set-members-width(min(max(150px, chan.drag-width), chan.widest));
+                                            App.hide-members(false);
+                                        }
+                                        focus-keys();
+                                    } else if (e.kind == PointerEventKind.cancel) {
+                                        chan.dragging = false;
+                                    }
+                                }
+                                moved => {
+                                    if (chan.dragging) { chan.drag-width = max(0px, chan.drag-from - (self.absolute-position.x + self.mouse-x - chan.drag-start)); }
+                                }
+                                double-clicked => { chan.dragging = false; App.hide-members(!App.members-hidden); focus-keys(); }
+                            }
+                            Rectangle {
+                                x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                                width: 15px; height: 40px;
+                                border-radius: 7px; border-width: 1px;
+                                border-color: members-grip.has-hover ? Palette.accent-background : Dim.rule;
+                                background: members-grip.has-hover ? Palette.accent-background : Palette.background;
+                                Text {
+                                    text: chan.folded ? "‹" : "›"; font-size: 14px; font-weight: 700;
+                                    color: members-grip.has-hover ? Palette.accent-foreground : Dim.text;
+                                }
+                                members-grip := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => { App.hide-members(!App.members-hidden); focus-keys(); }
+                                }
+                            }
+                        }
+                        if !chan.folded: Panel {
+                            width: chan.members-width;
+                            title: App.members.length == 1 ? "1 member" : App.members.length + " members";
+                            inner: 8px;
+                            ListView {
+                                for m in App.members: Rectangle {
+                                    height: 24px;
+                                    background: m.contact != "" && member-touch.has-hover ? Palette.foreground.transparentize(93%) : transparent;
+                                    HorizontalLayout {
+                                        spacing: 4px;
+                                        Text { text: m.connected ? "●" : "○"; color: m.connected ? Roles.status(NoteKind.success) : Dim.text; vertical-alignment: center; font-size: 10px; width: 12px; }
+                                        Text { text: m.name; color: Roles.colour(m.role); overflow: elide; vertical-alignment: center; horizontal-stretch: 1; }
+                                    }
+                                    member-touch := TouchArea {
+                                        mouse-cursor: m.summary != "" ? MouseCursor.pointer : MouseCursor.default;
+                                        changed has-hover => { if (m.summary != "") { Tip.hover(self.has-hover, m.summary, self.absolute-position.x, self.absolute-position.y, self.height); } }
+                                        clicked => {
+                                            if (m.contact != "") { Tip.text = ""; App.open-chat(m.contact); focus-keys(); }
+                                            else if (m.summary != "") { Tip.text = ""; App.send("/ask " + m.name); focus-keys(); }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if view == Pane.followed: Panel {
+                        vertical-stretch: 2;
+                        title: App.peer.name; title-colour: Roles.colour(1); detail: App.peer.status;
+                        PostList { posts: App.public-posts; note: App.peer.posts-note; key-given-back(key) => { focus-keys(); if (key != "") { press-key(key); } } }
+                    }
+                    if view == Pane.followed: HorizontalLayout {
+                        spacing: 6px; vertical-stretch: 0;
+                        Button { text: "Refresh"; clicked => { App.refresh(); focus-keys(); } }
+                        Rectangle { horizontal-stretch: 1; }
+                        Button { text: "Stop following"; clicked => { App.unfollow(); focus-keys(); } }
+                    }
+
+                    if view == Pane.request: Panel {
+                        title: "Contact request"; title-colour: Roles.status(NoteKind.warning);
+                        vertical-stretch: 2;
+                        VerticalLayout {
+                            spacing: 10px; alignment: start;
+                            Text { text: App.req.label + " has added you as a contact."; }
+                            FieldLine { label: "key"; value: App.req.key; }
+                            FieldLine { label: "address"; value: App.req.address; }
+                            Labelled { label: "Name for them"; text <=> req-name; }
+                            HorizontalLayout {
+                                spacing: 6px;
+                                Button { text: "Add"; primary: true; clicked => { App.add-request(req-name == "" ? App.req.suggested : req-name); req-name = ""; focus-keys(); } }
+                                Rectangle { horizontal-stretch: 1; }
+                                Button { text: "Dismiss"; clicked => { App.request(RequestAnswer.dismiss); focus-keys(); } }
+                                Button { text: "Block…"; clicked => { App.request(RequestAnswer.block); focus-keys(); } }
+                            }
+                        }
+                    }
+
+                    if view == Pane.peers || view == Pane.channels: HorizontalLayout {
+                        spacing: 6px; vertical-stretch: 2;
+                        if view == Pane.peers && !form-wide: Panel {
+                            title: App.pd.me ? "You" : App.dd.shown ? (App.dd.this ? "This device" : "Your device") : App.pd.request ? "Contact request" : "Contact";
+                            Page { column: 100000px; centred: false; VerticalLayout {
+                                spacing: 8px; alignment: start;
+                                if App.pd.shown: HorizontalLayout {
+                                    spacing: 10px; alignment: start;
+                                    if App.pd.pictured: Avatar { source: App.pd-avatar; width: 64px; }
+                                    VerticalLayout {
+                                        alignment: center; spacing: 2px;
+                                        Text { text: App.pd.name; color: Roles.colour(1); font-weight: 700; }
+                                        if App.pd.says != "": Text { text: "“" + App.pd.says + "”"; color: Dim.text; font-italic: true; wrap: word-wrap; }
+                                    }
+                                }
+                                if App.pd.shown: Rectangle { height: 4px; }
+                                if App.pd.shown: FieldLine { label: "status"; value: App.pd.status; }
+                                if App.pd.shown: VerticalLayout {
+                                    spacing: 2px;
+                                    for f[i] in App.pd-places: FieldLine { label: f.label; value: f.value; padding-top: i > 0 && f.label != "" ? 6px : 0px; }
+                                }
+                                if App.pd.shown: AddressSetter { current: App.pd.address; help: "Where to find them, if they've moved or you've a better address for them: an IP address or host name (a dynamic-DNS name, say, looked up at each try, so they're still found when the IP behind it changes), with :port if it isn't 1977; several are separated by commas. Or paste a swarm: code they've sent. Kept in place of what was there, on all your devices, and tried at once."; set(text) => { App.contact-address(text); focus-keys(); } }
+                                if App.pd.shown: FieldLine { label: "key"; value: App.pd.key; }
+                                if App.pd.shown: FieldLine { label: "cover"; value: App.pd.cover; }
+                                if App.pd.shown: FieldLine { label: "their files"; value: App.pd.files; }
+                                if App.pd.shown: ChoiceLine { label: "their calls"; model: Answering.choices; current: App.pd.answer-index; chosen(i) => { App.set-answer(i); focus-keys(); } }
+                                if App.pd.shown: HorizontalLayout {
+                                    spacing: 8px; alignment: start;
+                                    CheckBox { text: "May control your screen without asking"; checked: App.pd.control; toggled => { App.set-control(self.checked); focus-keys(); } }
+                                    HelpLabel { label: ""; help: "Lets them see and use your screen as soon as they ask in a call: it's shared with them if it isn't already, with no Allow to press, so nobody need be at this end. For someone you trust to help when you can't see the screen. Take back control, or moving your own mouse, still works as ever."; }
+                                }
+                                if App.pd.shown: ChoiceLine { label: "messages"; model: Answering.timers; current: App.pd.timer-index; chosen(i) => { App.set-timer(i); focus-keys(); } }
+                                if App.pd.shown: Rectangle { height: 4px; }
+                                if App.pd.shown: HorizontalLayout {
+                                    spacing: 6px;
+                                    Button { text: "Chat"; clicked => { go(Pane.mine); } }
+                                    WhyButton { text: "Call"; why: App.call.call-why; clicked => { App.place-call(false); focus-keys(); } }
+                                    WhyButton { text: "Video call"; why: App.call.video-why; clicked => { App.place-call(true); focus-keys(); } }
+                                    Button { text: "Send a file"; clicked => { App.send-file(); focus-keys(); } }
+                                    Button { text: "Edit…"; clicked => { open-peer-form(true); } }
+                                    Rectangle { horizontal-stretch: 1; }
+                                    Button { text: App.peer.asked ? "Cancel request…" : "Delete…"; clicked => { App.remove-peer(); focus-keys(); } }
+                                }
+                                if App.pd.shown: Rectangle { height: 4px; }
+                                if App.pd.shown: ContactCode { theirs: true; }
+                                if App.dd.shown: DevicePanel { done => { focus-keys(); } }
+                                if App.pd.me && App.device-code != "": DeviceCodeCard { done => { focus-keys(); } }
+                                if App.pd.me && App.device-code != "": Rectangle { height: 4px; }
+                                if App.pd.me: HorizontalLayout {
+                                    spacing: 10px; alignment: start;
+                                    if App.me.pictured: Avatar { source: App.my-avatar; width: 64px; }
+                                    VerticalLayout {
+                                        alignment: center; spacing: 2px;
+                                        Text { text: App.me.name; font-weight: 700; }
+                                        if App.me.says != "": Text { text: "“" + App.me.says + "”"; color: Dim.text; font-italic: true; wrap: word-wrap; }
+                                    }
+                                }
+                                if App.pd.me: Rectangle { height: 4px; }
+                                if App.pd.me: YouEditor { done => { focus-keys(); } }
+                                if App.pd.me: Rectangle { height: 4px; }
+                                if App.pd.me: Text { text: "What someone needs to add you: your key, and an address below."; color: Dim.text; wrap: word-wrap; }
+                                if App.pd.me: ContactCode { }
+                                if App.pd.me: Rectangle { height: 4px; }
+                                if App.pd.me: Text { text: "public key"; color: Dim.text; }
+                                if App.pd.me: TextInput { text: App.me.key; read-only: true; color: Palette.foreground; wrap: char-wrap; }
+                                if App.pd.me: Rectangle { height: 4px; }
+                                if App.pd.me: Text { text: "addresses"; color: Dim.text; }
+                                if App.pd.me && App.global-addresses.length == 0 && App.local-addresses.length == 0: Text { text: "none"; color: Dim.text; }
+                                if App.pd.me: VerticalLayout {
+                                    spacing: 4px;
+                                    for a in App.global-addresses: TextInput { text: a; read-only: true; color: Palette.foreground; }
+                                    for a in App.local-addresses: TextInput { text: a; read-only: true; color: Palette.foreground; }
+                                }
+                                if App.pd.me: Rectangle { height: 4px; }
+                                if App.pd.me: Text { text: App.me.listening-text; color: Dim.text; }
+                                if App.pd.me: Rectangle { height: 8px; }
+                                if App.pd.me: BlockedKeys { }
+                                if App.pd.request: Text { text: App.req.label + " has added you as a contact."; wrap: word-wrap; }
+                                if App.pd.request: FieldLine { label: "key"; value: App.req.key; }
+                                if App.pd.request: FieldLine { label: "address"; value: App.req.address; }
+                                if App.pd.request: HorizontalLayout {
+                                    spacing: 6px;
+                                    Button { text: "Add them…"; primary: true; clicked => { open-peer-form(false); } }
+                                    Rectangle { horizontal-stretch: 1; }
+                                    Button { text: "Dismiss"; clicked => { App.request(RequestAnswer.dismiss); focus-keys(); } }
+                                    Button { text: "Block…"; clicked => { App.request(RequestAnswer.block); focus-keys(); } }
+                                }
+                                if !App.pd.shown && !App.pd.me && !App.pd.request && !App.dd.shown: Text { text: "Nobody selected — Add a contact, at the end of CONTACTS, adds one."; color: Dim.text; wrap: word-wrap; }
+                            } }
+                        }
+                        if view == Pane.channels && !form-wide: Panel {
+                            title: "Group";
+                            VerticalLayout {
+                                spacing: 8px; alignment: start;
+                                if App.cd.shown: Text { text: App.cd.name; font-weight: 700; wrap: word-wrap; }
+                                if App.cd.shown: Rectangle { height: 4px; }
+                                if App.cd.shown: FieldLine { label: "in it"; value: App.cd.members; label-width: 70px; }
+                                if App.cd.shown: Labelled { label: App.cd.named ? "New name (blank: its members' names)" : "A name for it (now it goes by its members' names)"; text <=> group-name; }
+                                if App.cd.shown: HorizontalLayout {
+                                    spacing: 6px;
+                                    Button { text: "Rename"; clicked => { App.rename-group(group-name); group-name = ""; focus-keys(); } }
+                                    Button { text: "Chat"; clicked => { go(Pane.mine); } }
+                                    Button { text: "Add people…"; clicked => { picking = 2; } }
+                                    Rectangle { horizontal-stretch: 1; }
+                                    Button { text: "Leave…"; clicked => { App.send("/leave"); focus-keys(); } }
+                                }
+                                if !App.cd.shown: Text { text: "No group selected — New group is at the end of GROUPS, and Add people… in a contact's chat starts one with them."; color: Dim.text; wrap: word-wrap; }
+                            }
+                        }
+                        if peer-form != 0: Panel {
+                            preferred-width: form-wide ? 10000px : 360px; min-width: 260px; horizontal-stretch: form-wide ? 1 : 0;
+                            title: peer-form == 1 ? "Add a contact" : peer-form == 3 ? "Follow someone's public posts" : "Edit " + App.pd.name;
+                            frame-colour: Palette.accent-background;
+                            Page { column: form-wide ? 560px : 100000px; centred: false;
+                                if peer-form == 1: CodeScanner { }
+                                Labelled { label: peer-form == 2 ? "Their new code (paste a swarm: code they've sent)" : "Their code (paste a swarm: code)"; exact: true; text <=> f-code; }
+                                if code-read.note != "": Text { text: code-read.note; wrap: word-wrap; font-size: 12px; color: code-read.ok ? Dim.text : Roles.status(NoteKind.warning); }
+                                if peer-form != 3: Labelled { label: "Name"; text <=> f-name; }
+                                Labelled { label: "Address (several separated by commas)"; exact: true; text <=> f-address; }
+                                Labelled { label: "Public key"; exact: true; text <=> f-key; }
+                                if peer-form != 3: Labelled { label: "Cover rate (e.g. 64k, or 64k require)"; exact: true; text <=> f-cover; }
+                                if peer-form == 2: Labelled { label: "Save their files to this folder without asking (blank: ask)"; exact: true; text <=> f-receive; }
+                                HorizontalLayout {
+                                    spacing: 6px; alignment: end;
+                                    Button { text: "Cancel"; clicked => { if (App.me.scanning) { App.scan(false); } peer-form = 0; focus-keys(); } }
+                                    Button {
+                                        text: peer-form == 3 ? "Follow" : "Save"; primary: true;
+                                        clicked => {
+                                            if (App.me.scanning) { App.scan(false); }
+                                            if (peer-form == 1) { App.add-peer(f-name, f-address, f-key, f-cover); }
+                                            else if (peer-form == 3) { App.follow(f-address, f-key); }
+                                            else { App.update-peer(f-name, f-address, f-key, f-cover); App.set-receive(f-key, f-receive); }
+                                            peer-form = 0; focus-keys();
+                                        }
+                                    }
+                                }
+                                if form-wide: Rectangle { height: 8px; }
+                                if form-wide: NearbyList {
+                                    following: peer-form == 3;
+                                    picked(code) => { f-name = ""; f-code = code; }
+                                }
+                            }
+                        }
+                    }
+
+                    if view == Pane.transfers: Panel {
+                        title: App.transfers-with != "" ? "Transfers" : "All transfers";
+                        detail: App.transfers-with != "" ? "with " + App.transfers-with + " · select yourself in the list for everyone's" : "";
+                        vertical-stretch: 2;
+                        inner: 6px;
+                        TransferList { index <=> transfer-index; done => { focus-keys(); } }
+                    }
+
+                    if view == Pane.settings: SettingsPage {
+                        vertical-stretch: 2;
+                        changed scrolled => { root.settings-scrolled = self.scrolled; }
+                        done => { focus-keys(); }
+                    }
+
+                    if view == Pane.help: HelpPage {
+                        vertical-stretch: 2;
+                        page-token: page-token; page-dir: page-dir;
+                        enlarge(picture) => { help-picture = picture; help-big = true; }
+                        done => { focus-keys(); }
+                    }
+
+                    if view == Pane.first-run: Page { FirstRunCard { new-name <=> new-name; pass <=> pass; pass-again <=> pass-again; restore-words <=> restore-words; suggested: suggested; } }
+                    if view == Pane.locked: Page { LockedCard { pass <=> pass; } }
+                    if view == Pane.unlock: Page { UnlockCard { pass <=> pass; pass-again <=> pass-again; pass-new-again <=> pass-new-again; restore-words <=> restore-words; } }
+                    if view == Pane.words: Page { WordsCard { } }
+                    if App.fatal != "": Panel {
+                        title: App.wiped ? "This device has been taken off" : "Swarm couldn't start"; title-colour: Roles.status(NoteKind.error);
+                        Text { text: App.fatal; wrap: word-wrap; color: App.wiped ? Palette.foreground : Roles.status(NoteKind.error); }
+                    }
+                }
+
+                if main.list-width > 0: TouchArea {
+                    x: main.list-width - 3px; y: 0; width: 7px; height: main.height;
+                    mouse-cursor: col-resize;
+                    pointer-event(e) => {
+                        if (e.button == PointerEventButton.left && e.kind == PointerEventKind.down) {
+                            main.drag-width = main.list-width;
+                            main.drag-from = main.list-width;
+                            main.drag-start = self.absolute-position.x + self.mouse-x;
+                            main.dragging = true;
+                        } else if (e.button == PointerEventButton.left && e.kind == PointerEventKind.up && main.dragging) {
+                            main.dragging = false;
+                            if (main.drag-width < 110px) { App.narrow-list(true); }
+                            else if (abs(main.drag-width - main.list-width) > 0px || App.list-narrow) {
+                                App.set-list-width(min(max(150px, main.drag-width), main.widest));
+                                App.narrow-list(false);
+                            }
+                            focus-keys();
+                        } else if (e.kind == PointerEventKind.cancel) {
+                            main.dragging = false;
+                        }
+                    }
+                    moved => {
+                        if (main.dragging) { main.drag-width = max(0px, main.drag-from + self.absolute-position.x + self.mouse-x - main.drag-start); }
+                    }
+                    double-clicked => { main.dragging = false; App.narrow-list(!App.list-narrow); focus-keys(); }
+                }
+                if main.list-width > 0: Rectangle {
+                    x: main.list-width - 7px; y: (main.height - self.height) / 2;
+                    width: 15px; height: 40px;
+                    border-radius: 7px; border-width: 1px;
+                    border-color: grip.has-hover ? Palette.accent-background : Dim.rule;
+                    background: grip.has-hover ? Palette.accent-background : Palette.background;
+                    Text {
+                        text: main.narrow ? "›" : "‹"; font-size: 14px; font-weight: 700;
+                        color: grip.has-hover ? Palette.accent-foreground : Dim.text;
+                    }
+                    grip := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { App.narrow-list(!App.list-narrow); focus-keys(); }
+                    }
+                }
+            }
+
+            Rectangle { height: 1px; background: Dim.rule; }
+            HorizontalLayout {
+                padding-left: 12px; padding-right: 12px;
+                height: 22px;
+                Text { text: App.top.status; color: Roles.status(App.top.status-kind); vertical-alignment: center; overflow: elide; }
+            }
+        }
+    }
+
+    changed view => {
+        Tip.text = ""; App.qr-big = 0;
+        if (!outside) { focus-keys(); }
+        if (want-focus == 1 && view == Pane.mine) { post-token += 1; }
+        want-focus = 0;
+        pass = ""; pass-again = ""; pass-new-again = ""; restore-words = "";
+    }
+
+    if help-big && view == Pane.help: HelpPicture {
+        picture: help-picture;
+        close => { help-big = false; focus-keys(); }
+    }
+
+    if video-only && video-shown: Rectangle {
+        background: #000000;
+        stage := CallStage { width: parent.width; height: parent.height; }
+        if !hide-self && App.strip.length == 0: Rectangle {
+            width: min(parent.width / 5, parent.height / 4 * 16 / 9);
+            height: self.width * 9 / 16;
+            x: parent.width - self.width - 16px; y: parent.height - self.height - 16px;
+            background: #202020;
+            border-width: 1px; border-color: #ffffff60;
+            if App.call.local-on || App.call.sharing: Image { source: App.local-frame; image-fit: contain; width: parent.width; height: parent.height; }
+            if !App.call.local-on && !App.call.sharing: NoPicture { note: App.me.pictured ? "" : "camera off"; avatar: App.my-avatar; pictured: App.me.pictured; width: parent.width; height: parent.height; }
+        }
+        sharing-chip := Rectangle {
+            visible: App.call.sharing;
+            x: 16px; y: 16px; width: App.call.sharing ? sharing-text.preferred-width + 20px : 0px; height: 28px;
+            border-radius: 4px; background: #c0392b;
+            sharing-text := Text { width: parent.width; height: parent.height; horizontal-alignment: center; vertical-alignment: center; text: "sharing your screen"; color: #ffffff; font-weight: 700; }
+        }
+        if App.call.controlled-by != "": Rectangle {
+            x: 16px + (App.call.sharing ? sharing-chip.width + 8px : 0px); y: 16px; width: controlled-row.preferred-width + 16px; height: 34px;
+            border-radius: 4px; background: #c0392b;
+            controlled-row := HorizontalLayout {
+                padding-left: 10px; padding-right: 3px; padding-top: 3px; padding-bottom: 3px; spacing: 10px;
+                Text { vertical-alignment: center; text: App.call.controlled-by + (App.call.control-paused ? " paused: you're using your mouse" : " is controlling your screen"); color: #ffffff; font-weight: 700; }
+                CallButton { on-dark: true; tone: 1; text: "Take back control"; clicked => { App.stop-control(); focus-keys(); } }
+            }
+        }
+        TouchArea {
+            mouse-cursor: controls-shown ? default : none;
+            changed mouse-x => { show-controls(); }
+            changed mouse-y => { show-controls(); }
+            clicked => { show-controls(); }
+            double-clicked => { video-only = false; }
+        }
+        if controlling-shown: TouchArea {
+            property <int> fw: max(1, App.remote-frame.width);
+            property <int> fh: max(1, App.remote-frame.height);
+            property <length> box-w: self.width - stage.big-x;
+            property <length> box-h: self.height - stage.big-y;
+            property <length> pic-w: min(box-w, box-h * fw / fh);
+            property <length> pic-h: pic-w * fh / fw;
+            property <length> pic-x: stage.big-x + (box-w - pic-w) / 2;
+            property <length> pic-y: stage.big-y + (box-h - pic-h) / 2;
+            function point() { App.control-pointer((self.mouse-x - pic-x) / pic-w, (self.mouse-y - pic-y) / pic-h); }
+            changed mouse-x => { point(); }
+            changed mouse-y => { point(); }
+            pointer-event(event) => {
+                if (event.kind == PointerEventKind.down || event.kind == PointerEventKind.up) {
+                    point();
+                    App.control-button(
+                        event.button == PointerEventButton.left ? 0 : event.button == PointerEventButton.middle ? 1 : event.button == PointerEventButton.right ? 2
+                            : event.button == PointerEventButton.back ? 3 : event.button == PointerEventButton.forward ? 4 : -1,
+                        event.kind == PointerEventKind.down);
+                }
+                if (event.kind == PointerEventKind.down) { focus-keys(); }
+            }
+            scroll-event(event) => {
+                App.control-wheel(event.delta-x, event.delta-y);
+                accept
+            }
+        }
+        if controlling-shown: Rectangle {
+            x: stage.big-x + 8px; y: stage.big-y + 8px; width: controlling-row.preferred-width + 8px; height: 34px;
+            border-radius: 4px; background: #000000c0;
+            controlling-row := HorizontalLayout {
+                padding-left: 10px; padding-right: 3px; padding-top: 3px; padding-bottom: 3px; spacing: 6px;
+                Text { vertical-alignment: center; text: App.call.control-state == Controlling.paused ? App.call.controlling + " is using their mouse" : "controlling " + App.call.controlling + "'s screen"; color: #ffffff; font-weight: 700; }
+                Rectangle { width: 4px; }
+                CallButton { on-dark: true; sides: 10px; text: "Microphone"; tone: App.call.muted ? 0 : 3; clicked => { App.toggle-mute(); focus-keys(); } }
+                CallButton { on-dark: true; sides: 10px; text: "Camera"; tone: App.call.local-on ? 3 : 0; clicked => { App.toggle-camera(); focus-keys(); } }
+                CallButton { on-dark: true; sides: 10px; text: "Share screen"; tone: App.call.sharing ? 3 : 0; clicked => { App.toggle-screen(); focus-keys(); } }
+                CallButton { on-dark: true; sides: 10px; text: "Control"; tone: App.call.control-state == Controlling.asking ? 1 : App.call.control-state != Controlling.no ? 3 : 0; clicked => { App.toggle-control(); focus-keys(); } }
+                CallButton { on-dark: true; sides: 10px; text: "Full screen"; tone: 3; clicked => { video-only = false; focus-keys(); } }
+                CallButton { on-dark: true; sides: 10px; text: "End call"; tone: 2; clicked => { App.hang-up(); focus-keys(); } }
+            }
+        }
+        Timer {
+            interval: 500ms; running: controls-shown;
+            triggered => { if (animation-tick() - last-move > 3s) { controls-shown = false; } }
+        }
+        if controls-shown && !controlling-shown: Rectangle {
+            x: (parent.width - self.width) / 2; y: parent.height - self.height - 24px;
+            width: bar.preferred-width; height: 30px + 20px;
+            background: #000000b0; border-radius: 8px;
+            bar := VerticalLayout {
+                padding: 10px; spacing: 6px;
+                HorizontalLayout {
+                    spacing: 8px; alignment: center;
+                    CallButton { on-dark: true; text: "Microphone"; shortcut: "m"; tone: App.call.muted ? 0 : 3; clicked => { App.toggle-mute(); show-controls(); focus-keys(); } }
+                    CallButton { on-dark: true; text: "Camera"; shortcut: "w"; tone: App.call.local-on ? 3 : 0; clicked => { App.toggle-camera(); show-controls(); focus-keys(); } }
+                    CallButton { on-dark: true; text: "Share screen"; shortcut: "e"; tone: App.call.sharing ? 3 : 0; clicked => { App.toggle-screen(); show-controls(); focus-keys(); } }
+                    if App.call.can-control || App.call.control-state == Controlling.asking: CallButton { on-dark: true; text: "Control"; tone: App.call.control-state == Controlling.asking ? 1 : App.call.control-state != Controlling.no ? 3 : 0; clicked => { App.toggle-control(); show-controls(); focus-keys(); } }
+                    if App.addable.length > 0: CallButton { on-dark: true; text: "Invite…"; clicked => { picking = 1; } }
+                    CallButton { on-dark: true; text: "File"; clicked => { App.send-file(); show-controls(); focus-keys(); } }
+                    CallButton { on-dark: true; text: "Preview"; tone: hide-self ? 0 : 3; shortcut: "s"; clicked => { hide-self = !hide-self; show-controls(); focus-keys(); } }
+                    CallButton { on-dark: true; text: "Full screen"; tone: 3; shortcut: "Esc"; clicked => { video-only = false; focus-keys(); } }
+                    CallButton { on-dark: true; text: "End call"; tone: 2; shortcut: "h"; clicked => { App.hang-up(); focus-keys(); } }
+                }
+            }
+        }
+    }
+
+    if App.qr-big != 0 && (App.qr-big != 3 || App.device-code != ""): QrBig { x: 0; y: 0; width: root.width; height: root.height; }
+
+    asks := Asks {
+        ring-choice <=> ring-choice;
+        done => { focus-keys(); }
+    }
+    if picking != 0: Picker {
+        x: 0; y: 0; width: root.width; height: root.height;
+        title: picking == 1 ? "Invite to the call" : picking == 2 ? "Add to " + App.channel.name : "Start a group: who else?";
+        kind: picking;
+        chose(name) => {
+            if (picking == 1) { App.add-named(name); } else if (picking == 2) { App.send("/add " + name); } else { App.group-with(name); }
+            picking = 0; focus-keys();
+        }
+        close => { picking = 0; focus-keys(); }
+    }
+
+    if Tip.text != "": Rectangle {
+        property <length> w: min(380px, root.width - 16px, tip-text.preferred-width + 22px);
+        x: max(8px, min(Tip.x, root.width - w - 8px));
+        y: Tip.below + 4px + self.height <= root.height ? Tip.below + 4px : max(0px, Tip.above - self.height - 4px);
+        width: w; height: tip-column.preferred-height;
+        background: #2b2d31; border-radius: 5px;
+        drop-shadow-blur: 8px; drop-shadow-color: #00000060;
+        tip-column := VerticalLayout {
+            padding: 9px; padding-left: 11px; padding-right: 11px;
+            tip-text := Text { text: Tip.text; wrap: word-wrap; color: #f0f0f0; font-size: 12px; }
+        }
+    }
+}

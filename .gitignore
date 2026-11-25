@@ -1,0 +1,11 @@
+/target
+/*.png
+/tools/fakeva/target
+/fuzz/target
+/fuzz/corpus
+/fuzz/artifacts
+/fuzz/coverage
+*.pcap
+*.pcapng
+*.keystore
+.~lock.*

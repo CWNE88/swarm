@@ -1,0 +1,49 @@
+[package]
+name = "swarm-core"
+version = "1.0.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+
+[dependencies]
+anyhow = "1"
+openh264 = "0.9.8"
+# For changing the encoder's bitrate in place (see `video`).
+openh264-sys2 = { version = "0.9.8", default-features = false }
+audiopus = { version = "0.2.0", features = ["default_features"] }
+base64 = "0.22"
+# The 12 recovery words (`identity`): the BIP39 English list and checksum.
+bip39 = { version = "2.2", default-features = false, features = ["std"] }
+curve25519-dalek = "4"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+hkdf = "0.12"
+# Sealing what's kept on disk (`store`), and the identity file under the
+# passphrase (`identity`).
+chacha20poly1305 = "0.10"
+hmac = "0.12"
+argon2 = "0.5"
+zeroize = "1"
+bytes = "1"
+quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls", "ring"] }
+rand = "0.8"
+rcgen = "0.13"
+ring = "0.17"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+sha2 = "0.10"
+snow = "0.9"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "macros", "sync"] }
+socket2 = "0.6"
+# quinn's own warnings (a send the system refused), into the node's
+# log (`quinnlog`).
+tracing = { version = "0.1", default-features = false, features = ["std"] }
+x25519-dalek = { version = "2", features = ["static_secrets", "getrandom"] }
+
+# Free space where a file's going (`transfer::free_space`).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem", "Win32_Media", "Win32_System_Memory", "Win32_System_ErrorReporting", "Win32_System_LibraryLoader", "Win32_Foundation"] }
+
+# `cargo fuzz` builds with `--cfg fuzzing` (see `fuzz/`).
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(fuzzing)"] }

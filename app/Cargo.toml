@@ -1,0 +1,73 @@
+[package]
+name = "swarm-app"
+version = "1.0.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+# Everything an app built on swarm needs that isn't networking (that's
+# `swarm-core`) and isn't drawing (that's each front end): what to show
+# and when — chats, names, unread counts, settings — plus the devices
+# (microphone, speaker, camera), this device's addresses, and the
+# control socket other `swarm` commands reach a running app through.
+# The terminal UI (`cli/`) and the desktop and phone apps all sit on it.
+
+[dependencies]
+swarm-core = { path = "../core" }
+swarm-media = { path = "../media" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util", "signal"] }
+zeroize = "1"
+anyhow = "1"
+base64 = "0.22"
+# PulseAudio (a pure-Rust client, used when there's a server) besides
+# ALSA on Linux: see `audio`.
+cpal = { version = "0.18.2", features = ["pulseaudio"] }
+# Echo cancelling in calls: WebRTC's echo canceller (AEC3), ported to
+# Rust, so it builds for every target without a C++ toolchain.
+sonora = "0.2.0"
+zune-jpeg = "0.4.21"
+# Pictures for your profile (`avatar`): PNG and JPEG files read, and
+# the avatar encoded (the version the window already uses).
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
+# The sound a message makes on a computer (`sound`): the file the person
+# chose, read in pure Rust.
+symphonia = { version = "0.5.4", default-features = false, features = ["wav", "pcm", "adpcm", "ogg", "vorbis", "flac", "mp3", "isomp4", "aac"] }
+qrcode = { version = "0.14.1", default-features = false }
+rqrr = { version = "0.11.0", default-features = false }
+libc = "0.2"
+zxcvbn = "3"
+rand = "0.8"
+# mDNS sockets on port 5353, shared with the system's own (`discovery`).
+socket2 = { version = "0.6", features = ["all"] }
+
+# Android: to ask how many channels the microphone really opened with
+# and to open it as a call's (the same version cpal uses; API 28 is the
+# oldest swarm runs on).
+[target.'cfg(target_os = "android")'.dependencies]
+ndk = { version = "0.9", default-features = false, features = ["audio", "api-level-28"] }
+
+# Cameras on Linux: Video4Linux. The screen, for sharing it: X11 (the
+# version the window already uses), with RandR for the monitors and
+# XFIXES for the pointer; for being controlled, XTEST to do what's sent
+# and XInput2 to tell your own mouse and keys from it.
+[target.'cfg(target_os = "linux")'.dependencies]
+v4l = "0.14.0"
+x11rb = { version = "0.13.2", features = ["randr", "xfixes", "xtest", "xinput"] }
+# The screen on Wayland: the desktop's portal over D-Bus (the version the
+# window already uses), and PipeWire's library, loaded when sharing
+# starts rather than linked (see `screen_wayland.rs`).
+zbus = "5.19"
+serde = "1"
+futures-lite = "2.6"
+libloading = "0.8"
+
+# Windows: cameras through Media Foundation (the `windows` crate, for its
+# COM interfaces; the same version `cpal` already uses), the screen
+# through GDI, being controlled through SendInput, and the plain API
+# calls for this device's addresses, local time and the console.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["Win32_Media_MediaFoundation", "Win32_Media_KernelStreaming", "Win32_System_Com", "Win32_System_Variant", "Win32_System_Ole", "Win32_System_Com_StructuredStorage", "Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D11", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_UI_WindowsAndMessaging", "Win32_UI_HiDpi", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_LibraryLoader"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_Networking_WinSock", "Win32_System_Console", "Win32_System_Time", "Win32_Storage_FileSystem", "Win32_Security"] }
+
+# Timing each stage of a video call's pictures (`examples/video_stages.rs`).
+[dev-dependencies]
+openh264 = "0.9.8"

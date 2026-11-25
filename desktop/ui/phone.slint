@@ -1,0 +1,694 @@
+import { Button, CheckBox, LineEdit, ListView, Palette } from "std-widgets.slint";
+import { CodeRead, Roles, Dim, Tip, Look, Page, Panel, FieldLine, AddressSetter, ChoiceLine, Answering, Picker, Labelled, CallButton, WhyButton, DevicePanel, DeviceCodeCard, CallStage, Avatar, RingAvatar, NoPicture, ContactCode, CodeScanner, LevelBar, Chat, TypingBox, PostList, App, FirstRunCard, LockedCard, UnlockCard, WordsCard, SettingsPage, YouEditor, BlockedKeys, TransferList, Asks, Pane, Panes, Setting, Answer, NearbyList, RequestAnswer, TransferAnswer, AvatarStep, SoundStep, NoteKind, RowKind, LineKind, TransferState, PeerState, Controlling, Typing, HelpList, HelpPage, HelpPicture, QrBig, FileColumns } from "parts.slint";
+
+// A tab: lit and underlined while it's the view.
+component NavTab inherits Rectangle {
+    in property <string> text;
+    in property <bool> active;
+    callback clicked();
+    horizontal-stretch: 1;
+    Text {
+        width: parent.width; height: parent.height;
+        text: root.text; horizontal-alignment: center; vertical-alignment: center;
+        font-size: 13px; overflow: elide;
+        color: root.active ? Palette.accent-background : Dim.text;
+        font-weight: root.active ? 700 : 400;
+    }
+    if root.active: Rectangle { y: parent.height - 3px; height: 3px; x: 12px; width: parent.width - 24px; background: Palette.accent-background; }
+    TouchArea { clicked => { root.clicked(); } }
+}
+
+// A button for the top bar: a symbol, a finger's size.
+component BarButton inherits Rectangle {
+    in property <string> text;
+    // Why it can't be used now ("" : it can): greyed, and a tap says so.
+    in property <string> why;
+    callback clicked();
+    width: max(44px, label.preferred-width + 20px);
+    border-radius: 4px;
+    background: touch.pressed ? Palette.foreground.transparentize(88%) : transparent;
+    label := Text { width: parent.width; height: parent.height; text: root.text; horizontal-alignment: center; vertical-alignment: center; font-size: 17px; color: root.why == "" ? Palette.foreground : Dim.text; }
+    touch := TouchArea { clicked => { if (root.why == "") { root.clicked(); } else { Tip.show(root.why, root.absolute-position.x, root.absolute-position.y, root.height); } } }
+}
+
+export component PhoneWindow inherits Window {
+    title: "Swarm";
+    preferred-width: 412px;
+    preferred-height: 915px;
+    background: Palette.background;
+    default-font-size: 15px;
+    forward-focus: keys;
+
+    property <int> theme: App.theme;
+    property <string> suggested: App.suggested;
+    property <Pane> view: App.view;
+    property <bool> ring-shown: App.ask.ring-shown;
+    changed view => { App.qr-big = 0; }
+    changed theme => { Palette.color-scheme = theme == 1 ? ColorScheme.light : theme == 2 ? ColorScheme.dark : ColorScheme.unknown; }
+    init => {
+        Look.phone = true;
+        Palette.color-scheme = theme == 1 ? ColorScheme.light : theme == 2 ? ColorScheme.dark : ColorScheme.unknown;
+    }
+    changed suggested => { pass = suggested; pass-again = suggested; }
+    changed ring-shown => { ring-choice = 0; }
+    property <bool> call-shown: App.call.text != "" || App.call.video-shown;
+    property <bool> call-on: App.call.live || App.call.video-shown;
+    property <bool> call-hidden;
+    changed call-shown => { call-hidden = false; controls-shown = true; camera-menu = false; }
+    property <bool> camera-menu;
+    property <length> camera-menu-x;
+    property <length> camera-menu-y;
+    property <length> camera-menu-w;
+    property <int> scanned: App.me.scanned-count;
+    changed scanned => { if (App.me.scanned-name != "") { f-name = App.me.scanned-name; } f-address = App.me.scanned-address; f-key = App.me.scanned-key; }
+
+    // Something chosen from a tab's list, open over it (the controller
+    // told: only then is it read).
+    out property <bool> open;
+    changed open => { App.chat-shown(open); }
+    property <string> new-name;
+    property <string> restore-words;
+    property <string> pass;
+    property <string> pass-again;
+    property <string> pass-new-again;
+    property <string> draft;
+    property <string> post-draft;
+    property <string> req-name;
+    property <string> group-name;
+    property <string> f-name;
+    property <string> f-code;
+    property <CodeRead> code-read: App.read-code(f-code, peer-form == 2 ? App.pd.key : "");
+    property <bool> form-wide: peer-form == 1 || peer-form == 3;
+    changed form-wide => { App.browse(form-wide); }
+    changed f-code => {
+        if (code-read.ok) {
+            if (peer-form == 1 && f-name == "") { f-name = code-read.name; }
+            f-address = code-read.address;
+            if (peer-form != 2) { f-key = code-read.key; }
+        }
+    }
+    property <string> f-address;
+    property <string> f-key;
+    property <string> f-cover;
+    property <string> f-receive;
+    property <int> peer-form;
+    property <int> ring-choice;
+    property <int> transfer-index;
+    property <int> post-token;
+    property <bool> controls-shown: true;
+    property <int> picking;
+    property <duration> last-touch;
+    property <bool> help-big;
+    property <image> help-picture;
+    // The help shown, for the tests.
+    out property <string> tip: Tip.text;
+    property <bool> outside: Panes.outside(view);
+    property <bool> chats: Panes.chats(view);
+
+    property <bool> keyboard-up: self.virtual-keyboard-size.height > 0;
+    property <length> top-inset: self.safe-area-insets.top;
+    property <length> bottom-inset: keyboard-up ? max(self.safe-area-insets.bottom, root.height - self.virtual-keyboard-position.y) : self.safe-area-insets.bottom;
+
+    public function focus-keys() { keys.focus(); }
+    // Another tab. Between Contacts, Chats and Transfers, what's chosen
+    // stays chosen: open on one, it's open on the next too, as that tab
+    // has it (their details, their chat, their transfers).
+    function go(v: Pane) {
+        open = open && listed(view) && listed(v); peer-form = 0;
+        App.show-view(v);
+        focus-keys();
+    }
+    pure function listed(v: Pane) -> bool {
+        return Panes.chats(v) || v == Pane.peers || v == Pane.channels || v == Pane.transfers;
+    }
+    function choose(i: int) {
+        peer-form = 0;
+        App.select(i);
+        open = true;
+        focus-keys();
+    }
+    // From a peer's or a group's details to their chat, open.
+    function to-chat() {
+        App.show-view(Pane.mine);
+        open = true;
+        focus-keys();
+    }
+    // A new group, open, with the picker up to put people in it.
+    function new-group() {
+        App.new-group(); open = true; picking = 2;
+    }
+    function open-peer-form(edit: bool) {
+        f-code = "";
+        if (edit) { f-name = App.pd.name; f-address = App.pd.address; f-key = App.pd.key; f-cover = App.pd.cover-setting; f-receive = App.pd.receive; peer-form = 2; }
+        else if (App.pd.request) {
+            f-name = App.req.suggested; f-address = App.req.address == "unknown" ? "" : App.req.address; f-key = App.req.key; f-cover = ""; peer-form = 1;
+        }
+        else { f-name = ""; f-address = ""; f-key = ""; f-cover = ""; peer-form = 1; }
+    }
+    // A way to add, tapped at the end of a section in Contacts (its key,
+    // as sidebar.rs's Adding has it).
+    function add-chosen(key: string) {
+        peer-form = 0;
+        if (key == "contact") { f-code = ""; f-name = ""; f-address = ""; f-key = ""; f-cover = ""; peer-form = 1; }
+        else if (key == "follow") { f-code = ""; f-address = ""; f-key = ""; peer-form = 3; }
+        else if (key == "new-group") { new-group(); }
+        else if (key == "device") { App.show-device-code(true); open = true; }
+        focus-keys();
+    }
+    // Back: closes what's open, one thing at a time; on a tab's list, back
+    // to Chats. True if it did something (if not, swarm goes out of
+    // sight, still running).
+    function back() -> bool {
+        if (ring-shown) { return true; }
+        if (App.qr-big != 0) { App.qr-big = 0; return true; }
+        if (picking != 0) { App.pick(0, ""); picking = 0; return true; }
+        if (call-shown && !call-hidden) { call-hidden = true; return true; }
+        if (App.ask.offer-shown) { App.offer(Answer.later); return true; }
+        if (App.ask.confirm-shown) { App.confirm(false); return true; }
+        if (Tip.text != "") { Tip.text = ""; return true; }
+        if (help-big) { help-big = false; return true; }
+        if (App.me.scanning || App.first-run-scanning) { App.scan(false); return true; }
+        if (App.preview-shown) { App.preview(false); return true; }
+        if (peer-form != 0) { peer-form = 0; return true; }
+        if (open) { open = false; return true; }
+        if (!outside && !chats) { go(Pane.mine); return true; }
+        return false;
+    }
+
+    keys := FocusScope {
+        capture-key-pressed(event) => {
+            App.used();
+            return reject;
+        }
+        key-pressed(event) => {
+            if (event.text == Key.Back || event.text == Key.Escape) { return back() ? accept : reject; }
+            return reject;
+        }
+
+        VerticalLayout {
+            x: root.safe-area-insets.left; y: root.top-inset;
+            width: root.width - root.safe-area-insets.left - root.safe-area-insets.right;
+            height: root.height - root.top-inset - root.bottom-inset;
+
+            if outside: Page {
+                if view == Pane.first-run: FirstRunCard { new-name <=> new-name; pass <=> pass; pass-again <=> pass-again; restore-words <=> restore-words; suggested: suggested; }
+                if view == Pane.locked: LockedCard { pass <=> pass; }
+                if view == Pane.unlock: UnlockCard { pass <=> pass; pass-again <=> pass-again; pass-new-again <=> pass-new-again; restore-words <=> restore-words; }
+                if view == Pane.words: WordsCard { }
+            }
+
+            if !outside && (open || peer-form != 0): Rectangle {
+                height: 52px;
+                HorizontalLayout {
+                    padding-left: 6px; padding-right: 8px; spacing: 6px;
+                    if open || peer-form != 0: BarButton { text: "‹"; clicked => { back(); } }
+                    if open && view == Pane.peer && peer-form == 0 && App.peer.pictured: RingAvatar {
+                        width: 40px; y: (parent.height - self.height) / 2;
+                        source: App.peer-avatar; pictured: true;
+                        ring: App.peer.state == PeerState.online ? 1 : App.peer.state == PeerState.not-added || App.peer.state == PeerState.removed ? 2 : 0;
+                    }
+                    VerticalLayout {
+                        alignment: center; horizontal-stretch: 1; spacing: 1px;
+                        Text {
+                            font-weight: 700; font-size: 17px; overflow: elide;
+                            color: open && (view == Pane.peer || view == Pane.followed) ? Roles.colour(1) : Palette.foreground;
+                            text: peer-form == 1 ? "Add a contact" : peer-form == 2 ? "Edit " + App.pd.name : peer-form == 3 ? "Follow someone"
+                                : view == Pane.mine ? "Your posts" : view == Pane.peer || view == Pane.followed ? App.peer.name : view == Pane.channel ? App.channel.name
+                                : view == Pane.request ? "Contact request"
+                                : view == Pane.peers ? (App.pd.me ? "You" : App.dd.shown ? App.dd.name : App.pd.request ? "Contact request" : App.pd.name)
+                                : view == Pane.channels ? (App.cd.shown ? App.cd.name : "Group")
+                                : view == Pane.transfers ? (App.transfers-with != "" ? "Transfers with " + App.transfers-with : "All transfers")
+                                : view == Pane.help ? App.help-title : "";
+                        }
+                        if open && view == Pane.peer: Text {
+                            text: App.peer.status; font-size: 12px; overflow: elide;
+                            color: App.peer.state == PeerState.online ? Roles.status(NoteKind.success) : App.peer.state == PeerState.not-added || App.peer.state == PeerState.removed ? Roles.status(NoteKind.warning) : Dim.text;
+                        }
+                        if open && view == Pane.peer && App.peer.says != "": Text { text: "“" + App.peer.says + "”"; font-size: 12px; font-italic: true; color: Dim.text; overflow: elide; }
+                        if open && view == Pane.channel: Text { text: App.channel.detail; font-size: 12px; color: Dim.text; overflow: elide; }
+                    }
+                    if open && view == Pane.peer && App.call.text == "": BarButton { text: "Call"; why: App.call.call-why; clicked => { App.place-call(false); } }
+                    if open && view == Pane.peer && App.call.text == "": BarButton { text: "Video"; why: App.call.video-why; clicked => { App.place-call(true); } }
+                    if open && view == Pane.channel: BarButton { text: "Call"; clicked => { App.place-call(false); } }
+                    if open && view == Pane.channel: BarButton { text: "Add"; clicked => { picking = 2; } }
+                    if open && view == Pane.peer && App.call.add-to-call != "": BarButton { text: "Add to call"; why: App.call.call-why; clicked => { App.place-call(false); } }
+                }
+                Rectangle { y: parent.height - 1px; height: 1px; background: Dim.rule; }
+            }
+
+            if !outside: Rectangle {
+                height: 44px;
+                HorizontalLayout {
+                    NavTab { text: "Contacts"; active: view == Pane.peers || view == Pane.channels; clicked => { go(Pane.peers); } }
+                    NavTab { text: "Chats"; active: chats; clicked => { go(Pane.mine); } }
+                    NavTab { text: "Transfers"; active: view == Pane.transfers; clicked => { go(Pane.transfers); } }
+                    NavTab { text: "Settings"; active: view == Pane.settings; clicked => { go(Pane.settings); } }
+                    NavTab { text: "Help"; active: view == Pane.help; clicked => { go(Pane.help); } }
+                }
+                Rectangle { y: parent.height - 1px; height: 1px; background: Dim.rule; }
+            }
+
+            if !outside && open && view == Pane.peer: HorizontalLayout {
+                padding-left: 12px; padding-right: 12px; spacing: 4px; height: 36px;
+                for t[i] in ["Chat", "Posts"]: Rectangle {
+                    horizontal-stretch: 1;
+                    Text {
+                        width: parent.width; height: parent.height; horizontal-alignment: center; vertical-alignment: center;
+                        text: t + (i == 1 && App.peer.new-posts ? " •" : "");
+                        color: i == App.peer.tab ? Palette.accent-background : Dim.text; font-weight: i == App.peer.tab ? 700 : 400;
+                    }
+                    if i == App.peer.tab: Rectangle { y: parent.height - 2px; height: 2px; background: Palette.accent-background; }
+                    TouchArea { clicked => { App.set-tab(i); } }
+                }
+            }
+
+            if !outside && call-shown && call-hidden: Rectangle {
+                height: call-row.preferred-height;
+                background: (App.call.live ? Roles.status(NoteKind.success) : Roles.status(NoteKind.warning)).transparentize(85%);
+                TouchArea { clicked => { call-hidden = false; } }
+                call-row := HorizontalLayout {
+                    padding: 8px; padding-left: 12px; spacing: 8px;
+                    Text { text: App.call.text + (App.call.live ? (App.call.muted ? " · microphone off" : " · microphone on") + (App.call.local-on ? " · camera on" : " · camera off") : ""); vertical-alignment: center; horizontal-stretch: 1; overflow: elide; color: App.call.live ? Roles.status(NoteKind.success) : Roles.status(NoteKind.warning); font-weight: 600; }
+                    CallButton { text: "Return"; clicked => { call-hidden = false; } }
+                    CallButton { text: "End call"; tone: 2; clicked => { App.hang-up(); } }
+                }
+            }
+            if !outside && App.top.progress-what != "": HorizontalLayout {
+                alignment: center; spacing: 4px;
+                Text { text: App.top.progress-what; color: Dim.text; font-size: 12px; overflow: elide; }
+                FileColumns { font-size: 12px; }
+            }
+
+            if !outside: Rectangle {
+                vertical-stretch: 1;
+
+                if !open && peer-form == 0 && (chats || view == Pane.peers || view == Pane.channels || view == Pane.transfers): VerticalLayout {
+                    ListView {
+                        vertical-stretch: 1;
+                        for row[i] in App.rows: Rectangle {
+                            property <bool> next-inner: i + 1 < App.rows.length && App.rows[i + 1].inner;
+                            height: row.kind == RowKind.heading ? 34px : row.inner ? 46px : row.kind == RowKind.add ? 48px : 64px;
+                            background: area.pressed ? Palette.foreground.transparentize(90%) : transparent;
+                            if row.kind == RowKind.you && next-inner: Rectangle { x: 37px; y: 56px; width: 1px; height: parent.height - 56px; background: Dim.tree; }
+                            if row.inner: Rectangle { x: 37px; y: 0; width: 1px; height: next-inner ? parent.height : parent.height / 2; background: Dim.tree; }
+                            if row.inner: Rectangle { x: 37px; y: parent.height / 2; width: 12px; height: 1px; background: Dim.tree; }
+                            HorizontalLayout {
+                                padding-left: row.inner ? 52px : 14px; padding-right: 14px; spacing: 12px;
+                                if row.kind == RowKind.heading: Text { text: row.mark; color: Dim.text; font-size: 12px; vertical-alignment: bottom; }
+                                if row.kind == RowKind.heading: Text { text: row.name; color: Dim.text; font-size: 12px; font-weight: 700; vertical-alignment: bottom; }
+                                if row.kind == RowKind.heading: Text { text: row.tag; color: Dim.text; font-size: 12px; vertical-alignment: bottom; horizontal-stretch: 1; }
+                                if row.kind == RowKind.add: Text {
+                                    width: row.inner ? 12px : 48px; horizontal-alignment: center; vertical-alignment: center;
+                                    text: "+"; font-size: row.inner ? 18px : 22px; color: Palette.accent-background;
+                                }
+                                if row.kind == RowKind.add: Text { text: row.name; font-size: 17px; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; color: Palette.accent-background; }
+                                if row.kind == RowKind.device: Rectangle {
+                                    width: 12px; height: 12px; y: (parent.height - self.height) / 2; border-radius: 6px;
+                                    background: row.ring == 1 ? Roles.status(NoteKind.success) : Dim.text;
+                                }
+                                if row.kind != RowKind.heading && row.kind != RowKind.add && row.kind != RowKind.device: RingAvatar {
+                                    y: (parent.height - self.height) / 2;
+                                    source: App.row-pictures[i].picture; pictured: App.row-pictures[i].shown; letter: row.letter; ring: row.ring;
+                                    width: 48px;
+                                }
+                                if row.kind != RowKind.heading && row.kind != RowKind.add: VerticalLayout {
+                                    alignment: center; spacing: 2px; horizontal-stretch: 1;
+                                    Text {
+                                        text: row.name; overflow: elide; font-size: 17px;
+                                        color: row.dim ? Dim.text : Palette.foreground;
+                                        font-weight: row.unread > 0 || row.kind == RowKind.you ? 700 : 400;
+                                    }
+                                    Text { text: row.sub; overflow: elide; font-size: 12px; color: Dim.text; }
+                                }
+                                if row.unread > 0: Rectangle {
+                                    width: max(24px, count.preferred-width + 12px); height: 22px; y: (parent.height - self.height) / 2;
+                                    border-radius: 11px; background: Roles.status(NoteKind.warning);
+                                    count := Text { width: parent.width; height: parent.height; text: row.unread; color: #ffffff; font-weight: 700; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
+                                }
+                            }
+                            if row.kind != RowKind.heading && row.kind != RowKind.add && !row.inner && !next-inner: Rectangle { x: 74px; y: parent.height - 1px; width: parent.width - 88px; height: 1px; background: Dim.rule; }
+                            area := TouchArea { clicked => { if row.kind == RowKind.heading { App.select(i); } else if row.kind == RowKind.add { add-chosen(row.mark); } else { transfer-index = 0; choose(i); } } }
+                        }
+                    }
+                }
+
+                if open && view == Pane.mine: VerticalLayout {
+                    padding: 8px; spacing: 6px;
+                    Panel { title: "Your posts · anyone"; detail: App.me.followers-text; vertical-stretch: 1; PostList { touch: true; posts: App.my-public; empty: "nothing yet"; } }
+                    Panel { title: "Your posts · contacts only"; vertical-stretch: 1; PostList { touch: true; posts: App.my-private; empty: "nothing yet"; } }
+                    TypingBox {
+                        title: "New post"; placeholder: "Write a post"; enter-sends: false; lines-high: 100px;
+                        text <=> post-draft; focus-token: post-token;
+                        done-typing => { focus-keys(); }
+                    }
+                    HorizontalLayout {
+                        spacing: 6px; alignment: end;
+                        Button { text: "Post to contacts"; enabled: post-draft != ""; clicked => { App.post(post-draft, false); post-draft = ""; focus-keys(); } }
+                        Button { text: "Post to anyone"; enabled: post-draft != ""; clicked => { App.post(post-draft, true); post-draft = ""; focus-keys(); } }
+                    }
+                }
+
+                if open && view == Pane.peer: VerticalLayout {
+                    padding: 6px; spacing: 6px;
+                    if App.peer.tab == 0: Chat {
+                        vertical-stretch: 1;
+                        lines: App.lines; widest-name: App.chat.widest-name; show-times: App.chat.show-times; empty: App.chat.empty; key: App.chat.key; touch: true;
+                    }
+                    if App.peer.state == PeerState.removed: HorizontalLayout {
+                        spacing: 6px;
+                        Text { text: App.peer.name + " has removed you."; vertical-alignment: center; horizontal-stretch: 1; wrap: word-wrap; color: Roles.status(NoteKind.warning); }
+                        Button { text: "OK"; primary: true; clicked => { App.remove-peer(); } }
+                    }
+                    if App.peer.tab == 0 && App.peer.state != PeerState.removed: HorizontalLayout {
+                        spacing: 6px;
+                        VerticalLayout { alignment: end; Button { text: "File"; clicked => { App.send-file(); } } }
+                        TypingBox {
+                            horizontal-stretch: 1;
+                            placeholder: "Message " + App.peer.name; text <=> draft;
+                            send(t) => { App.send(t); } done-typing => { focus-keys(); }
+                        }
+                        VerticalLayout { alignment: end; Button { text: "Send"; primary: true; enabled: draft != ""; clicked => { App.send(draft); draft = ""; } } }
+                    }
+                    if App.peer.tab == 1: VerticalLayout {
+                        spacing: 8px; padding: 6px;
+                        Text { text: "for anyone"; font-weight: 700; }
+                        PostList { touch: true; vertical-stretch: 1; posts: App.public-posts; note: App.peer.posts-note; empty: "no public posts"; }
+                        Rectangle { height: 1px; background: Dim.rule; }
+                        Text { text: "for contacts"; font-weight: 700; }
+                        PostList { touch: true; vertical-stretch: 1; posts: App.private-posts; empty: "none for you to see"; }
+                    }
+                }
+
+                if open && view == Pane.channel: VerticalLayout {
+                    padding: 6px; spacing: 6px;
+                    Chat {
+                        vertical-stretch: 1;
+                        lines: App.lines; widest-name: App.chat.widest-name; show-times: App.chat.show-times; empty: App.chat.empty; key: App.chat.key; touch: true;
+                    }
+                    HorizontalLayout {
+                        spacing: 6px;
+                        TypingBox {
+                            horizontal-stretch: 1;
+                            placeholder: "Message " + App.channel.name; text <=> draft;
+                            send(t) => { App.send(t); } done-typing => { focus-keys(); }
+                        }
+                        VerticalLayout { alignment: end; Button { text: "Send"; primary: true; enabled: draft != ""; clicked => { App.send(draft); draft = ""; } } }
+                    }
+                }
+
+                if open && view == Pane.followed: VerticalLayout {
+                    padding: 10px;
+                    Text { text: App.peer.status; color: Dim.text; }
+                    PostList { touch: true; posts: App.public-posts; note: App.peer.posts-note; }
+                }
+
+                if open && view == Pane.request: Page {
+                    Text { text: App.req.label + " has added you as a contact."; wrap: word-wrap; }
+                    FieldLine { label: "key"; value: App.req.key; label-width: 70px; }
+                    FieldLine { label: "address"; value: App.req.address; label-width: 70px; }
+                    Labelled { label: "Name for them"; text <=> req-name; }
+                    HorizontalLayout {
+                        spacing: 6px;
+                        Button { text: "Add"; primary: true; clicked => { App.add-request(req-name == "" ? App.req.suggested : req-name); req-name = ""; focus-keys(); } }
+                        Rectangle { horizontal-stretch: 1; }
+                        Button { text: "Dismiss"; clicked => { App.request(RequestAnswer.dismiss); open = false; focus-keys(); } }
+                        Button { text: "Block…"; clicked => { App.request(RequestAnswer.block); open = false; focus-keys(); } }
+                    }
+                }
+
+                if open && view == Pane.peers && peer-form == 0: Page {
+                    if App.pd.shown && (App.pd.pictured || App.pd.says != ""): HorizontalLayout {
+                        spacing: 12px; alignment: start;
+                        if App.pd.pictured: Avatar { source: App.pd-avatar; width: 80px; }
+                        if App.pd.says != "": Text { text: "“" + App.pd.says + "”"; color: Dim.text; font-italic: true; wrap: word-wrap; vertical-alignment: center; horizontal-stretch: 1; }
+                    }
+                    if App.pd.shown: FieldLine { label: "status"; value: App.pd.status; label-width: 90px; }
+                    if App.pd.shown: VerticalLayout {
+                        spacing: 2px;
+                        for f[i] in App.pd-places: FieldLine { label: f.label; value: f.value; label-width: 90px; padding-top: i > 0 && f.label != "" ? 6px : 0px; }
+                    }
+                    if App.pd.shown: AddressSetter { current: App.pd.address; help: "Where to find them, if they've moved or you've a better address for them: an IP address or host name (a dynamic-DNS name, say, looked up at each try, so they're still found when the IP behind it changes), with :port if it isn't 1977; several are separated by commas. Or paste a swarm: code they've sent. Kept in place of what was there, on all your devices, and tried at once."; set(text) => { App.contact-address(text); focus-keys(); } }
+                    if App.pd.shown: FieldLine { label: "key"; value: App.pd.key; label-width: 90px; }
+                    if App.pd.shown: FieldLine { label: "cover"; value: App.pd.cover; label-width: 90px; }
+                    if App.pd.shown: FieldLine { label: "their files"; value: App.pd.files; label-width: 90px; }
+                    if App.pd.shown: ChoiceLine { label: "their calls"; model: Answering.choices; current: App.pd.answer-index; label-width: 90px; chosen(i) => { App.set-answer(i); focus-keys(); } }
+                    if App.pd.shown: ChoiceLine { label: "messages"; model: Answering.timers; current: App.pd.timer-index; label-width: 90px; chosen(i) => { App.set-timer(i); focus-keys(); } }
+                    if App.pd.shown: GridLayout {
+                        spacing: 6px;
+                        Row {
+                            Button { text: "Chat"; primary: true; clicked => { to-chat(); } }
+                            Button { text: "Send a file"; clicked => { App.send-file(); focus-keys(); } }
+                        }
+                        Row {
+                            WhyButton { text: "Call"; why: App.call.call-why; clicked => { App.place-call(false); focus-keys(); } }
+                            WhyButton { text: "Video call"; why: App.call.video-why; clicked => { App.place-call(true); focus-keys(); } }
+                        }
+                        Row {
+                            Button { text: "Add people…"; clicked => { picking = 3; } }
+                        }
+                        Row {
+                            Button { text: "Edit…"; clicked => { open-peer-form(true); } }
+                            Button { text: App.peer.asked ? "Cancel request…" : "Delete…"; clicked => { App.remove-peer(); focus-keys(); } }
+                        }
+                    }
+                    if App.pd.shown: ContactCode { theirs: true; side: 240px; }
+                    if App.dd.shown: DevicePanel { label-width: 90px; done => { focus-keys(); } }
+                    if App.pd.me && App.device-code != "": DeviceCodeCard { side: 240px; done => { focus-keys(); } }
+                    if App.pd.me: HorizontalLayout {
+                        spacing: 12px; alignment: start;
+                        if App.me.pictured: Avatar { source: App.my-avatar; width: 80px; }
+                        VerticalLayout {
+                            alignment: center; spacing: 2px; horizontal-stretch: 1;
+                            Text { text: App.me.name; font-weight: 700; }
+                            if App.me.says != "": Text { text: "“" + App.me.says + "”"; color: Dim.text; font-italic: true; wrap: word-wrap; }
+                        }
+                    }
+                    if App.pd.me: YouEditor { done => { focus-keys(); } }
+                    if App.pd.me: Text { text: "What someone needs to add you: your key, and an address below."; color: Dim.text; wrap: word-wrap; }
+                    if App.pd.me: ContactCode { side: 240px; }
+                    if App.pd.me: Text { text: "public key"; color: Dim.text; }
+                    if App.pd.me: TextInput { text: App.me.key; read-only: true; color: Palette.foreground; wrap: char-wrap; }
+                    if App.pd.me: Text { text: "addresses"; color: Dim.text; }
+                    if App.pd.me && App.global-addresses.length == 0 && App.local-addresses.length == 0: Text { text: "none"; color: Dim.text; }
+                    if App.pd.me: VerticalLayout {
+                        spacing: 4px;
+                        for a in App.global-addresses: TextInput { text: a; read-only: true; color: Palette.foreground; }
+                        for a in App.local-addresses: TextInput { text: a; read-only: true; color: Palette.foreground; }
+                    }
+                    if App.pd.me: Text { text: App.me.listening-text; color: Dim.text; wrap: word-wrap; }
+                    if App.pd.me: BlockedKeys { }
+                    if App.pd.request: Text { text: App.req.label + " has added you as a contact."; wrap: word-wrap; }
+                    if App.pd.request: FieldLine { label: "key"; value: App.req.key; label-width: 90px; }
+                    if App.pd.request: FieldLine { label: "address"; value: App.req.address; label-width: 90px; }
+                    if App.pd.request: HorizontalLayout {
+                        spacing: 6px;
+                        Button { text: "Add them…"; primary: true; clicked => { open-peer-form(false); } }
+                        Rectangle { horizontal-stretch: 1; }
+                        Button { text: "Dismiss"; clicked => { App.request(RequestAnswer.dismiss); open = false; focus-keys(); } }
+                        Button { text: "Block…"; clicked => { App.request(RequestAnswer.block); open = false; focus-keys(); } }
+                    }
+                }
+
+                if peer-form != 0: Page {
+                    if peer-form == 1: CodeScanner { }
+                                Labelled { label: peer-form == 2 ? "Their new code (paste a swarm: code they've sent)" : "Their code (paste a swarm: code)"; exact: true; text <=> f-code; }
+                                if code-read.note != "": Text { text: code-read.note; wrap: word-wrap; font-size: 12px; color: code-read.ok ? Dim.text : Roles.status(NoteKind.warning); }
+                    if peer-form != 3: Labelled { label: "Name"; text <=> f-name; }
+                    Labelled { label: "Address (several separated by commas)"; exact: true; text <=> f-address; }
+                    Labelled { label: "Public key"; exact: true; text <=> f-key; }
+                    if peer-form != 3: Labelled { label: "Cover rate (e.g. 64k, or 64k require)"; exact: true; text <=> f-cover; }
+                    if peer-form == 2: Labelled { label: "Save their files to this folder without asking (blank: ask)"; exact: true; text <=> f-receive; }
+                    HorizontalLayout {
+                        spacing: 6px; alignment: end;
+                        Button { text: "Cancel"; clicked => { if (App.me.scanning) { App.scan(false); } peer-form = 0; focus-keys(); } }
+                        Button {
+                            text: peer-form == 3 ? "Follow" : "Save"; primary: true;
+                            clicked => {
+                                if (App.me.scanning) { App.scan(false); }
+                                if (peer-form == 1) { App.add-peer(f-name, f-address, f-key, f-cover); }
+                                else if (peer-form == 3) { App.follow(f-address, f-key); }
+                                else { App.update-peer(f-name, f-address, f-key, f-cover); App.set-receive(f-key, f-receive); }
+                                peer-form = 0; focus-keys();
+                            }
+                        }
+                    }
+                    if peer-form != 2: Rectangle { height: 8px; }
+                    if peer-form != 2: NearbyList {
+                        following: peer-form == 3;
+                        picked(code) => { f-name = ""; f-code = code; }
+                    }
+                }
+
+                if open && view == Pane.channels: Page {
+                    if App.cd.shown: FieldLine { label: "in it"; value: App.cd.members; label-width: 70px; }
+                    if App.cd.shown: Labelled { label: App.cd.named ? "New name (blank: its members' names)" : "A name for it"; text <=> group-name; }
+                    if App.cd.shown: HorizontalLayout {
+                        spacing: 6px; alignment: start;
+                        Button { text: "Chat"; primary: true; clicked => { to-chat(); } }
+                        Button { text: "Rename"; clicked => { App.rename-group(group-name); group-name = ""; focus-keys(); } }
+                        Button { text: "Add people…"; clicked => { picking = 2; } }
+                    }
+                    if App.cd.shown: HorizontalLayout {
+                        spacing: 6px; alignment: end;
+                        Button { text: "Leave…"; clicked => { App.send("/leave"); focus-keys(); } }
+                    }
+                }
+
+                if open && view == Pane.transfers: VerticalLayout {
+                    padding: 6px;
+                    TransferList { index <=> transfer-index; done => { focus-keys(); } }
+                }
+
+                if view == Pane.help && !open: VerticalLayout {
+                    width: parent.width; height: parent.height;
+                    if App.help-version != "": Text {
+                        text: App.help-version;
+                        height: 36px;
+                        horizontal-alignment: center; vertical-alignment: center; overflow: elide;
+                        font-size: 13px;
+                        color: Dim.text;
+                    }
+                    HelpList { vertical-stretch: 1; touch: true; chosen => { open = true; focus-keys(); } }
+                }
+                if view == Pane.help && open: HelpPage {
+                    width: parent.width; height: parent.height; touch: true;
+                    enlarge(picture) => { help-picture = picture; help-big = true; }
+                    done => { focus-keys(); }
+                }
+                if view == Pane.help && help-big: HelpPicture { width: parent.width; height: parent.height; picture: help-picture; close => { help-big = false; } }
+                if view == Pane.settings: SettingsPage { width: parent.width; height: parent.height; done => { focus-keys(); } }
+
+                if App.fatal != "": Rectangle {
+                    background: Palette.background;
+                    Text { x: 12px; width: parent.width - 24px; text: App.wiped ? App.fatal : "Swarm couldn't start: " + App.fatal; wrap: word-wrap; color: App.wiped ? Palette.foreground : Roles.status(NoteKind.error); }
+                }
+            }
+
+            if !outside && App.top.status != "": Text {
+                text: App.top.status; color: Roles.status(App.top.status-kind); font-size: 13px;
+                horizontal-alignment: center; wrap: word-wrap;
+            }
+        }
+    }
+
+    if call-shown && !call-hidden: Rectangle {
+        background: #000000;
+        stage := CallStage { width: parent.width; height: parent.height; top: root.top-inset; }
+        if call-on && App.strip.length == 0: Rectangle {
+            property <bool> wide: App.call.local-on && App.local-frame.width > 0 ? App.local-frame.width > App.local-frame.height : parent.width > parent.height;
+            property <length> long: min(parent.width, parent.height) * 5 / 9;
+            width: self.wide ? self.long : self.long * 9 / 16;
+            height: self.wide ? self.long * 9 / 16 : self.long;
+            x: parent.width - self.width - 12px; y: root.top-inset + 12px;
+            background: #202020;
+            if App.call.local-on: Image { source: App.local-frame; image-fit: contain; width: parent.width; height: parent.height; }
+            if !App.call.local-on: NoPicture { note: App.me.pictured ? "" : "camera off"; avatar: App.my-avatar; pictured: App.me.pictured; width: parent.width; height: parent.height; }
+            LevelBar { x: 4px; y: parent.height - 7px; width: parent.width - 8px; on-dark: true; level: App.own-level; }
+            Rectangle { border-width: 1px; border-color: #000000; }
+        }
+        if App.call-details.length > 0: Rectangle {
+            x: stage.big-x + 12px; y: max(root.top-inset, stage.big-y) + 60px;
+            width: min(parent.width - stage.big-x - 24px, 360px); height: details.preferred-height;
+            background: #00000090; border-radius: 4px;
+            details := VerticalLayout {
+                padding: 8px; spacing: 2px;
+                for d in App.call-details: HorizontalLayout {
+                    spacing: 8px;
+                    Text { text: d.label; font-size: 12px; color: #ffffffa0; width: 80px; }
+                    Text { text: d.value; font-size: 12px; color: #ffffffe0; wrap: word-wrap; horizontal-stretch: 1; }
+                }
+            }
+        }
+        if !App.call.video-shown && App.call-members.length > 0: Rectangle {
+            x: 12px; y: parent.height - root.bottom-inset - 80px - self.height; width: members-column.preferred-width + 16px; height: members-column.preferred-height + 12px;
+            background: #00000090; border-radius: 4px;
+            members-column := VerticalLayout {
+                padding: 6px; padding-left: 8px; padding-right: 8px; spacing: 4px;
+                for m[i] in App.call-members: VerticalLayout {
+                    spacing: 3px;
+                    Text { text: (m.number > 0 ? m.number + " " : "") + m.name; font-size: 13px; color: #ffffff; font-weight: m.talking ? 700 : 400; }
+                    LevelBar { width: 80px; on-dark: true; level: App.member-levels[i]; }
+                }
+            }
+        }
+        TouchArea { clicked => { controls-shown = !controls-shown; last-touch = animation-tick(); } }
+        CallButton { x: 12px; y: root.top-inset + 12px; on-dark: true; sides: 12px; text: "‹"; clicked => { call-hidden = true; } }
+        Timer {
+            interval: 500ms; running: controls-shown && App.call.video-shown && !camera-menu;
+            triggered => { if (animation-tick() - last-touch > 4s) { controls-shown = false; } }
+        }
+        if controls-shown || !App.call.video-shown: HorizontalLayout {
+            y: parent.height - root.bottom-inset - self.preferred-height - 20px; height: self.preferred-height;
+            spacing: 4px; alignment: center;
+            if call-on: CallButton { on-dark: true; sides: 6px; text: "Microphone"; tone: App.call.muted ? 0 : 3; clicked => { App.toggle-mute(); last-touch = animation-tick(); } }
+            if call-on: CallButton {
+                on-dark: true; sides: 6px; text: "Camera"; tone: App.call.local-on ? 3 : 0;
+                why: App.call.can-camera || App.call.local-on ? "" : "A conference's video is started by whoever began it.";
+                clicked => {
+                    if (App.call-cameras.length > 1) {
+                        camera-menu-x = self.absolute-position.x; camera-menu-y = self.absolute-position.y; camera-menu-w = self.width;
+                        camera-menu = !camera-menu;
+                    } else { App.toggle-camera(); }
+                    last-touch = animation-tick();
+                }
+            }
+            if call-on && App.addable.length > 0: CallButton { on-dark: true; sides: 6px; text: "Invite…"; clicked => { picking = 1; last-touch = animation-tick(); } }
+            if call-on: CallButton { on-dark: true; sides: 6px; text: "File"; clicked => { App.send-file(); last-touch = animation-tick(); } }
+            CallButton { on-dark: true; sides: 6px; text: "End call"; tone: 2; clicked => { App.hang-up(); } }
+        }
+        if camera-menu && call-on: TouchArea { clicked => { camera-menu = false; last-touch = animation-tick(); } }
+        if camera-menu && call-on: Rectangle {
+            property <length> w: max(camera-menu-w + 24px, 96px);
+            x: max(8px, min(parent.width - self.w - 8px, camera-menu-x + camera-menu-w / 2 - self.w / 2));
+            y: camera-menu-y - self.height - 8px;
+            width: self.w; height: menu-column.preferred-height;
+            background: #000000c0; border-radius: 6px;
+            menu-column := VerticalLayout {
+                padding: 6px; spacing: 4px;
+                for name[i] in App.call-cameras: CallButton {
+                    on-dark: true; text: name; tone: App.call.local-on && i == App.settings.camera-index ? 3 : 0;
+                    clicked => {
+                        if (!App.call.local-on || i != App.settings.camera-index) { App.use-camera(i); }
+                        camera-menu = false; last-touch = animation-tick();
+                    }
+                }
+                if App.call.local-on: CallButton {
+                    on-dark: true; text: "Off";
+                    clicked => { App.toggle-camera(); camera-menu = false; last-touch = animation-tick(); }
+                }
+            }
+        }
+    }
+
+    if App.qr-big != 0 && (App.qr-big != 3 || App.device-code != ""): QrBig { x: 0; y: 0; width: root.width; height: root.height; }
+
+    if Tip.text != "": Rectangle {
+        property <length> w: root.width - 24px;
+        x: 12px;
+        y: Tip.below + 4px + self.height <= root.height - root.bottom-inset ? Tip.below + 4px : max(root.top-inset, Tip.above - self.height - 4px);
+        width: w; height: tip-column.preferred-height;
+        background: #2b2d31; border-radius: 6px;
+        drop-shadow-blur: 8px; drop-shadow-color: #00000060;
+        tip-column := VerticalLayout {
+            padding: 12px;
+            Text { text: Tip.text; wrap: word-wrap; color: #f0f0f0; font-size: 14px; }
+        }
+        TouchArea { clicked => { Tip.text = ""; } }
+    }
+
+    asks := Asks {
+        y: root.top-inset; height: root.height - root.top-inset - root.bottom-inset;
+        ring-choice <=> ring-choice;
+        done => { focus-keys(); }
+    }
+    if picking != 0: Picker {
+        y: root.top-inset; height: root.height - root.top-inset - root.bottom-inset;
+        title: picking == 1 ? "Invite to the call" : picking == 2 ? "Add to " + App.channel.name : "Start a group: who else?";
+        kind: picking;
+        chose(name) => {
+            if (picking == 1) { App.add-named(name); } else if (picking == 2) { App.send("/add " + name); } else { App.group-with(name); open = true; }
+            picking = 0; focus-keys();
+        }
+        close => { picking = 0; focus-keys(); }
+    }
+}

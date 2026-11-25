@@ -1,0 +1,57 @@
+Fuzzing what other people can send
+==================================
+
+Each target feeds libFuzzer's inputs to something that reads bytes or
+text from someone else, and fails on a panic, a hang, running out of
+memory, or a broken rule the target checks. Coverage-guided: inputs that
+reach new code are kept (fuzz/corpus/<target>) and grown from.
+
+Needs the nightly toolchain and cargo-fuzz (normal builds stay on
+stable):
+
+    rustup toolchain install nightly --profile minimal
+    cargo install cargo-fuzz
+
+From the top of the repository:
+
+    cargo +nightly fuzz run <target>                       # until stopped
+    cargo +nightly fuzz run <target> -- -max_total_time=600
+    cargo +nightly fuzz run <target> fuzz/artifacts/<target>/crash-...   # one input again
+
+The first build takes a few minutes (everything is built instrumented);
+fuzz/target, corpus and artifacts aren't kept in git.
+
+Targets
+-------
+
+frame         A frame from the wire (protocol::fuzz_frame): decodes or
+              errors, and what decodes encodes back the same. Also a
+              bundle's notices.
+cover_slots   Cover slots one after another on one connection
+              (cover::Inbound), and every item that comes out whole read
+              as a frame.
+video_pieces  A call's video pieces in any order, count and size
+              (video::VideoDecoder::push): never more held than the caps
+              (check_held), what's whole decoded in OpenH264.
+h264, h265    The stream as the graphics-chip decoders read it before the
+              chip does (media's h264 and h265: SPS, PPS, slice headers).
+codes         Pasted or scanned text: a contact's code, a code for adding
+              a device, a peers list.
+mdns          A packet from anyone on the network (swarm_core::mdns):
+              read as a query and as an answer.
+
+`protocol::fuzz_frame` and `VideoDecoder::check_held` exist only in fuzz
+builds (`#[cfg(fuzzing)]`, which cargo fuzz sets).
+
+When it finds something
+-----------------------
+
+Fix it, then put the input in a test of its own in the crate it's in
+(an ordinary stable test, as media/src/h265.rs
+reference_picture_sets_too_long_are_refused_not_overflowed does
+with media/testdata/h265-rps-steps.bin), so it stays fixed without the
+fuzzer.
+
+Not fuzzed: the Noise handshake and QUIC (snow's and quinn's), Opus (C,
+libopus's), the vault (each line is AEAD-sealed: anything altered fails
+to open before it's parsed).

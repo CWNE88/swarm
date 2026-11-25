@@ -1,0 +1,18 @@
+# A stand-in VA-API driver for swarm's tests (see src/lib.rs). Its own
+# workspace, so swarm's builds don't build it; the tests build it.
+[package]
+name = "swarm-fakeva"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+libloading = "0.8.9"
+openh264 = "0.9.8"
+zune-jpeg = "0.4.21"
+
+[workspace]

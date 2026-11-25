@@ -1,0 +1,55 @@
+[package]
+name = "swarm-desktop"
+version = "1.0.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+# swarm's window: laid out like the terminal UI (list on the left, the
+# conversation in the middle, members on the right), in the system's
+# ordinary widgets (Slint), on the shared app layer (`swarm-app`).
+
+# A library: the `swarm` command (cli/) opens this window unless it's
+# asked for the terminal UI.
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+swarm-core = { path = "../core" }
+swarm-app = { path = "../app" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+anyhow = "1"
+base64 = "0.22"
+# Whether the window's the one in use (Slint keeps it, but doesn't
+# offer it): a message's sound is made only when it isn't. In the tests,
+# what a field asks of the keyboard (Slint's own window hook).
+i-slint-core = "=1.18.1"
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+# The window handle: the X11 window of the bar shown while being
+# controlled, to keep it over the rest (`control_bar`). The window's own
+# events (winit's) before Slint has them: Ctrl and the wheel make the text
+# larger or smaller wherever the mouse is (`wheel_sizes_text`), where a
+# list or page under it would scroll instead.
+slint = { version = "1", features = ["renderer-software", "software-renderer-systemfonts", "raw-window-handle-06", "unstable-winit-030"] }
+raw-window-handle = "0.6"
+# Load fontconfig when the window opens rather than linking it, so the
+# ARM build needs no ARM font libraries on the build machine (any desktop
+# it runs on has them).
+i-slint-common = { version = "=1.18.1", features = ["fontconfig-dlopen"] }
+
+# The phone app (android/): Android's own activity in place of a desktop
+# window, drawn with OpenGL ES.
+[target.'cfg(target_os = "android")'.dependencies]
+slint = { version = "1", default-features = false, features = ["std", "compat-1-2", "backend-android-activity-06", "renderer-femtovg", "renderer-software"] }
+
+[build-dependencies]
+slint-build = "1"
+
+# For the tests: finding an element on the window, and where it is
+# (built with the UI's debug info, only for them).
+[dev-dependencies]
+i-slint-backend-testing = "=1.18.1"
+swarm-desktop = { path = ".", features = ["ui-tests"] }
+
+[features]
+ui-tests = []

@@ -1,0 +1,78 @@
+# Fuzzing what other people can send: `cargo +nightly fuzz run <target>`
+# from the top of the repository (see `fuzz/README`). Its own workspace,
+# so the normal builds never build it.
+[package]
+name = "swarm-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+license = "GPL-3.0-or-later"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+swarm-core = { path = "../core" }
+swarm-media = { path = "../media" }
+swarm-app = { path = "../app" }
+
+[workspace]
+members = ["."]
+
+# The same patched QUIC the real builds use (see vendor/README).
+[patch.crates-io]
+quinn-proto = { path = "../vendor/quinn-proto" }
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "frame"
+path = "fuzz_targets/frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cover_slots"
+path = "fuzz_targets/cover_slots.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "video_pieces"
+path = "fuzz_targets/video_pieces.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "h264"
+path = "fuzz_targets/h264.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "h265"
+path = "fuzz_targets/h265.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "codes"
+path = "fuzz_targets/codes.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mdns"
+path = "fuzz_targets/mdns.rs"
+test = false
+doc = false
+bench = false

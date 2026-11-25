@@ -1,0 +1,41 @@
+[workspace]
+resolver = "2"
+members = ["core", "media", "app", "desktop", "cli", "android"]
+
+# The echo canceller runs on every 10ms of a call's audio: unoptimised,
+# it's slower than the audio, so debug builds (and their tests) build it
+# optimised too.
+[profile.dev.package.sonora]
+opt-level = 3
+[profile.dev.package.sonora-aec3]
+opt-level = 3
+[profile.dev.package.sonora-agc2]
+opt-level = 3
+[profile.dev.package.sonora-common-audio]
+opt-level = 3
+[profile.dev.package.sonora-fft]
+opt-level = 3
+[profile.dev.package.sonora-ns]
+opt-level = 3
+[profile.dev.package.sonora-simd]
+opt-level = 3
+# The passphrase's key stretching (64 MiB of Argon2id) takes minutes
+# unoptimised; tests and debug builds unlock too.
+[profile.dev.package.argon2]
+opt-level = 3
+[profile.dev.package.blake2]
+opt-level = 3
+
+# Release binaries go without their symbol table: it holds nothing a
+# panic's message needs, and would name the build machine's folders
+# (assembly files' paths, the Windows linker's temporary files).
+[profile.release]
+strip = "symbols"
+
+# Slint's Android backend with its keyboard input fixed, Slint's styled
+# text passing on what isn't a link, and QUIC's probes kept coming while a
+# link's gone (see vendor/README).
+[patch.crates-io]
+i-slint-core = { path = "vendor/i-slint-core" }
+i-slint-backend-android-activity = { path = "vendor/i-slint-backend-android-activity" }
+quinn-proto = { path = "vendor/quinn-proto" }

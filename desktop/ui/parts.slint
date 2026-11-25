@@ -1,0 +1,2647 @@
+import { Button, LineEdit, ListView, ScrollView, CheckBox, ComboBox, Palette, ProgressIndicator } from "std-widgets.slint";
+
+// Which pane the window shows: what's selected in the list (your own
+// posts, a peer, a group, a request, someone followed), a
+// view chosen in the top bar (peers, a group's details, transfers,
+// settings), or
+// one shown before there's anyone to be (the first run, your words,
+// unlocking), while locked when left, or when swarm can't go on; or the
+// manual (help).
+export enum Pane { mine, peer, channel, request, peers, channels, transfers, settings, first-run, fatal, followed, words, unlock, locked, help }
+// A setting changed in Settings (see `set-setting`).
+export enum Setting { show-times, utc, show-joins, peer-order, theme, text-size, cancel-echo, suppress-noise, steady-level, lock-after, microphone, speaker, camera, video-size, call-details, notify }
+// A file offered: accepted, declined, or left for later.
+export enum Answer { yes, no, later }
+// Someone asking to be added: dismissed (they can ask again), or blocked.
+export enum RequestAnswer { dismiss, block }
+// A transfer in the list: accepted, declined, cancelled, or (finished)
+// cleared from the list.
+export enum TransferAnswer { accept, decline, cancel, clear }
+// Your picture: from a file, the camera opened to take one, taken, not
+// after all, or removed.
+export enum AvatarStep { from-file, open-camera, take, cancel, remove }
+// The message sound, or the ringtone: a file chosen, played to hear it,
+// or Swarm's own.
+export enum SoundStep { choose, play, built-in }
+// How a note in the status line reads, and the colours that go with it.
+export enum NoteKind { info, success, warning, error }
+// A line of the list: you, a section's heading, a peer, someone asking
+// to be added, a group, someone followed.
+// add: a way to add, at the end of a section in Contacts (its key the
+// row's mark).
+export enum RowKind { you, device, heading, peer, request, channel, followed, add }
+// A line of a chat: something said, something that happened (its name
+// holds the mark), or a day's heading (its text).
+// did: someone's /me (its name the mark, its text "Owen waves").
+// missed: a call nobody answered, in a colour of its own.
+export enum LineKind { said, happened, day, did, missed }
+// A transfer: moving, offered, done, or anything else (declined, cancelled, failed).
+export enum TransferState { moving, offered, done, ended }
+// The peer shown: online, offline, or yet to add you.
+export enum PeerState { online, offline, not-added, removed }
+// Control of the screen shown large: not asked for, asked for, ours, or
+// paused while they use their own mouse.
+export enum Controlling { no, asking, yes, paused }
+// What a key does (desktop/src/keys.rs says which key, for what's
+// showing; app.slint's `run` does it). none: nothing, the key's left to
+// whatever else takes it; swallow: nothing, but it's taken.
+export enum KeyCommand {
+    none, swallow,
+    ring-left, ring-right, ring-chosen, answer-video, answer-voice, reject-call,
+    allow-control, refuse-control,
+    accept-offer, decline-offer, offer-later,
+    yes, no, block,
+    video-back, leave-video-only, video-only, big-screen, hide-self,
+    mute, camera, share-screen, hang-up, call, video-call,
+    close-preview, preview, back,
+    unfollow, add-request, dismiss-request, block-request,
+    follow-form, add-form, edit-form, remove-peer, cycle-answer,
+    remove-device, toggle-relay,
+    new-group, add-people,
+    transfer-up, transfer-down, accept-transfer, decline-transfer, cancel-transfer,
+    up, down, write, post-box, switch-tab, page-up, page-down,
+    new-post, refresh, send-file, next-timer, narrow,
+    peers, chats, channels, transfers, settings, quit,
+    help, help-up, help-down
+}
+
+// Which panes come under each tab, and which are before there's anyone to be.
+export global Panes {
+    pure public function chats(pane: Pane) -> bool {
+        return pane == Pane.mine || pane == Pane.peer || pane == Pane.channel || pane == Pane.request || pane == Pane.followed;
+    }
+    pure public function outside(pane: Pane) -> bool {
+        return pane == Pane.first-run || pane == Pane.words || pane == Pane.unlock || pane == Pane.locked;
+    }
+}
+
+// One line of the list. sub: the line under the name (the start of
+// their key); letter: what their circle shows without a picture; ring:
+// the circle's ring, none (0), online (1), waiting on an answer either
+// way (2: hasn't added you, removed you, or asks to be added).
+// inner: a step in, inside You (DEVICES and your devices).
+export struct Row { kind: RowKind, mark: string, mark-role: int, name: string, tag: string, sub: string, letter: string, ring: int, unread: int, dim: bool, selected: bool, inner: bool }
+// Someone's picture in a list (App.row-pictures, by App.rows' order), if
+// shown: a peer's, or yours.
+export struct Pictured { picture: image, shown: bool }
+
+// One line of a chat.
+// mark: after a message the user sent a contact, faint: ◷ waiting, ✓
+// delivered ("" on any other line).
+// for-me: in a group, someone else's line that names you: faintly
+// highlighted, as IRC does.
+// `rich`: the text with its web addresses as links, when `linked`.
+// refs: what deletes it (App.delete-line), "" for a line that can't be
+// deleted; deleting: deleted, and they've yet to hear (shown faint).
+// first: a message that starts a run of one person's (the line before
+// isn't theirs, or was a while before): a narrow chat shows its name
+// above it, and the rest of the run under it without.
+// Part of a chat line's text, in bytes.
+export struct TextSpan { start: int, end: int }
+export struct ChatLine { kind: LineKind, time: string, name: string, role: int, text: string, mark: string, for-me: bool, linked: bool, rich: styled-text, refs: string, deleting: bool, first: bool }
+
+// contact: their name as a contact of yours ("" : not one), and
+// summary: how they are and where they're reached, for the mouse over
+// them.
+export struct Member { name: string, connected: bool, role: int, contact: string, summary: string }
+// Someone in a conference call: their number, and whether we can remove
+// them (they came in after us).
+// talking: their voice is heard now.
+// A code pasted into Add or Edit (App.read-code): its fields when it's
+// one to take (ok), and what to say about it.
+export struct CodeRead { ok: bool, name: string, address: string, key: string, note: string }
+export struct CallMember { number: int, name: string, removable: bool, talking: bool }
+// Someone in a video call's strip (see snapshot.rs's Spot): why there's
+// no picture ("" while there is); own: us, our picture the local-frame.
+// avatar: theirs (or ours), shown while there's no picture, if pictured.
+// Their voice's level is App.strip-levels', in the same place.
+export struct StripTile { name: string, note: string, own: bool, picture: image, avatar: image, pictured: bool }
+// linked, rich: as ChatLine's; refs: what deletes it (one of the user's
+// own, App.delete-post), "" for one that can't be.
+export struct PostItem { when: string, text: string, linked: bool, rich: styled-text, refs: string }
+export struct TransferItem { arrow: string, who: string, name: string, size: string, state: string, progress: float, kind: TransferState, can-accept: bool, can-cancel: bool, can-clear: bool }
+// A key hint: the key as shown, what it does, and the key a click
+// presses ("" for one that isn't a single key, like Up/Down).
+// dim: it can't be done now (a Call greyed), and a click does nothing.
+export struct Hint { key: string, what: string, press: string, dim: bool }
+// A row of a details view: its label ("" under the first of a group),
+// and its value.
+export struct Detail { label: string, value: string }
+
+// One of your devices, chosen under You: its name, how it stands, when
+// it was added, where it last said it was, its key; whether it's this
+// one, and whether it relays (linked: you've other devices for it to
+// relay for), and whether it receives connections only (this one's own).
+// answer-index: how its calls are answered here, of App's answer
+// choices (Answering.choices).
+export struct DeviceDetails { shown: bool, name: string, status: string, in-use: string, added: string, address: string, typed: string, key: string, this: bool, relay: bool, receive-only: bool, bandwidth-limit: string, receive-limit: string, linked: bool, calls: string, answer-index: int, control: bool }
+
+// Name colours, as roles: 0 you, 1 the other person in a one-to-one
+// chat, 2..11 group members in the order added, 12 anyone else; and for the
+// list's marks, 13 needs attention, 14 a group you're in. Chosen to read
+// on both light and dark backgrounds.
+export global Roles {
+    // Someone's /me, apart from what's said.
+    out property <brush> did: #a347ba;
+    // A missed call's line.
+    out property <brush> missed: #d0443e;
+    // Behind a group line that names you: faint, on light or dark.
+    out property <brush> mention: #f0b42930;
+    // A web address in a chat line, which opens in the browser.
+    out property <color> link: Palette.color-scheme == ColorScheme.dark ? #6aaef0 : #1f6fc8;
+    pure public function colour(role: int) -> brush {
+        if (role == 0) { return Palette.foreground; }
+        if (role == 1) { return #2f9e4f; }
+        if (role == 2) { return #1f98ad; }
+        if (role == 3) { return #2f9e4f; }
+        if (role == 4) { return #b7860b; }
+        if (role == 5) { return #a347ba; }
+        if (role == 6) { return #3b78d8; }
+        if (role == 7) { return #4caf6e; }
+        if (role == 8) { return #a08a1e; }
+        if (role == 9) { return #c0569f; }
+        if (role == 10) { return #2aa7a0; }
+        if (role == 11) { return #5a64c8; }
+        if (role == 13) { return #c08a00; }
+        if (role == 14) { return Palette.accent-background; }
+        return Palette.foreground.transparentize(45%);
+    }
+    pure public function status(kind: NoteKind) -> brush {
+        if (kind == NoteKind.success) { return #2f9e4f; }
+        if (kind == NoteKind.warning) { return #b7860b; }
+        if (kind == NoteKind.error) { return #d0443e; }
+        return Palette.foreground.transparentize(30%);
+    }
+}
+
+// Secondary text: the foreground, lighter; and the frames' lines.
+export global Dim {
+    out property <brush> text: Palette.foreground.transparentize(45%);
+    out property <brush> rule: Palette.foreground.transparentize(80%);
+    // Your devices' lines, from you to each: plainer than text, clearer
+    // than a rule.
+    out property <brush> tree: Palette.foreground.transparentize(65%);
+}
+
+// What the mouse is over says about itself (a setting's help): where to
+// show it, in the window's own coordinates, and the text ("" for none).
+export global Tip {
+    in-out property <string> text;
+    in-out property <length> x;
+    // The bottom of what it's about, and its top (to go above it when
+    // there's no room below).
+    in-out property <length> below;
+    in-out property <length> above;
+    // `text` shown about what's at `x`, `y` (its top), `height` high; a
+    // second tap on the same puts it away.
+    public function show(text: string, x: length, y: length, height: length) {
+        if (self.text == text) { self.text = ""; return; }
+        self.x = x;
+        self.below = y + height;
+        self.above = y;
+        self.text = text;
+    }
+    // The mouse come over what it's about (`over`), or gone.
+    public function hover(over: bool, text: string, x: length, y: length, height: length) {
+        if (over && text != "") {
+            self.x = x;
+            self.below = y + height;
+            self.above = y;
+            self.text = text;
+        } else if (!over && self.text == text) {
+            self.text = "";
+        }
+    }
+}
+
+// How the window's laid out: for a phone (the Android app), narrower,
+// one thing at a time, and tapped rather than pointed at.
+export global Look {
+    in-out property <bool> phone;
+}
+
+// A setting's name: the mouse over it (a tap, on a phone) shows its help
+// beside it, if it has any (see `Tip`).
+export component HelpLabel inherits Rectangle {
+    in property <string> label;
+    in property <string> help;
+    min-height: 22px;
+    HorizontalLayout {
+        alignment: start;
+        Text { text: root.label; color: Dim.text; vertical-alignment: center; overflow: elide; }
+    }
+    hover := TouchArea {
+        clicked => {
+            if (Look.phone && root.help != "") {
+                if (Tip.text == root.help) { Tip.text = ""; }
+                else {
+                    Tip.x = root.absolute-position.x;
+                    Tip.below = root.absolute-position.y + root.height;
+                    Tip.above = root.absolute-position.y;
+                    Tip.text = root.help;
+                }
+            }
+        }
+        changed has-hover => {
+            if (Look.phone) {
+            } else if (self.has-hover && root.help != "") {
+                Tip.x = root.absolute-position.x;
+                Tip.below = root.absolute-position.y + root.height;
+                Tip.above = root.absolute-position.y;
+                Tip.text = root.help;
+            } else if (!self.has-hover && Tip.text == root.help) {
+                Tip.text = "";
+            }
+        }
+    }
+}
+
+// One line of Settings: its name (and help), then what changes it.
+export component SettingRow inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> help;
+    spacing: 8px;
+    HelpLabel { label: root.label; help: root.help; width: Look.phone ? 118px : 180px; }
+    @children
+}
+
+// A page that scrolls when it's taller than the window (a large text
+// size, a small window), its contents in a column no wider than `column`.
+export component Page inherits ScrollView {
+    in property <length> column: 560px;
+    in property <bool> centred: true;
+    content-width: self.visible-width;
+    property <length> ends: end.y;
+    property <length> tall;
+    init => { tall = ends; }
+    changed ends => { tall = ends; }
+    content-height: max(self.visible-height, page.preferred-height, tall);
+    page := VerticalLayout {
+        width: root.visible-width;
+        alignment: start;
+        HorizontalLayout {
+            alignment: root.centred ? LayoutAlignment.center : LayoutAlignment.start;
+            VerticalLayout {
+                width: min(root.column, root.visible-width - 14px);
+                spacing: 8px;
+                @children
+                end := Rectangle { height: 0px; }
+            }
+        }
+    }
+}
+
+// Someone's picture (see swarm_app's avatar.rs), round.
+export component Avatar inherits Rectangle {
+    in property <image> source;
+    width: 32px; height: self.width;
+    border-radius: self.width / 2;
+    clip: true;
+    Image { source: root.source; width: parent.width; height: parent.height; image-fit: cover; }
+}
+
+// Someone in the list: their picture (or a letter), a thin gap of
+// whatever's behind, and a thin ring round it: green while they're
+// online, orange while they've yet to add you back, a faint grey
+// otherwise.
+export component RingAvatar inherits Rectangle {
+    in property <image> source;
+    in property <bool> pictured;
+    in property <string> letter;
+    in property <int> ring;
+    width: 48px; height: self.width;
+    property <float> scale: self.width / 48px;
+    Rectangle {
+        border-radius: self.width / 2; border-width: 2.25px * root.scale;
+        border-color: root.ring == 1 ? Roles.status(NoteKind.success) : root.ring == 2 ? Roles.status(NoteKind.warning) : #80808070;
+    }
+    Rectangle {
+        x: 3.75px * root.scale; y: self.x; width: parent.width - 2 * self.x; height: self.width;
+        border-radius: self.width / 2; clip: true;
+        background: #5a5a5a;
+        if root.pictured: Image { source: root.source; width: parent.width; height: parent.height; image-fit: cover; }
+        if !root.pictured: Text { text: root.letter; width: parent.width; height: parent.height; horizontal-alignment: center; vertical-alignment: center; font-size: 15px * root.scale; font-weight: 700; color: #ffffff; }
+    }
+}
+
+// Where a call's picture would be, while there's none: why, under their
+// picture if they have one.
+export component NoPicture inherits Rectangle {
+    in property <string> note;
+    in property <image> avatar;
+    in property <bool> pictured;
+    in property <length> font-size: 14px;
+    if !pictured: Text {
+        width: parent.width; height: parent.height;
+        text: root.note; color: #ffffffa0; font-size: root.font-size; horizontal-alignment: center; vertical-alignment: center; wrap: word-wrap;
+    }
+    if pictured: VerticalLayout {
+        alignment: center; spacing: 6px;
+        HorizontalLayout { alignment: center; Avatar { source: root.avatar; width: min(root.width, root.height) * 0.55; } }
+        Text { text: root.note; color: #ffffffa0; font-size: root.font-size; horizontal-alignment: center; wrap: word-wrap; }
+    }
+}
+
+// A frame like the terminal UI's panels: a thin border with the title
+// set into its top edge (a name, then something dimmer after it), tabs
+// on the right of that edge, and a note on the bottom edge. Lit in the
+// accent colour while it's the one being typed in.
+export component Panel inherits Rectangle {
+    in property <string> title;
+    in property <brush> title-colour: Palette.foreground;
+    in property <string> detail;
+    in property <brush> detail-colour: Dim.text;
+    // Before the title: whose it is's picture, if pictured; after the
+    // detail, what they say of themselves (their status).
+    in property <image> picture;
+    in property <bool> pictured;
+    in property <string> says;
+    in property <bool> active;
+    in property <brush> frame-colour: active ? Palette.accent-background : Dim.rule;
+    in property <[string]> tabs;
+    in property <int> tab;
+    // A tab with something new in it, marked with a dot.
+    in property <int> marked: -1;
+    in property <string> note;
+    in property <brush> note-colour: Dim.text;
+    in property <length> inner: 10px;
+    // Inside the frame: nothing (the window shows through), or a dialog's.
+    in property <brush> fill: transparent;
+    in property <bool> raised;
+    // The title in the middle of the frame (a dialog's), not on the left.
+    in property <bool> centred;
+    callback tab-clicked(int);
+    property <length> half: 9px;
+    property <length> below: note != "" ? half : 0px;
+
+    Rectangle {
+        y: half; height: parent.height - half - below;
+        border-width: 1px; border-radius: 4px; border-color: root.frame-colour;
+        background: root.fill;
+        drop-shadow-blur: root.raised ? 16px : 0px;
+        drop-shadow-color: #00000050;
+    }
+    VerticalLayout {
+        padding: root.inner; padding-top: half + root.inner; padding-bottom: below + root.inner;
+        @children
+    }
+    Rectangle {
+        visible: title != "" || detail != "";
+        x: root.centred ? (root.width - self.width) / 2 : 10px; y: 0; height: 2 * half;
+        width: min(heading.preferred-width, root.width - 20px - (tabs.length > 0 ? tab-strip.preferred-width + 10px : 0px));
+        background: Palette.background;
+        heading := HorizontalLayout {
+            padding-left: 5px; padding-right: 5px; spacing: 8px;
+            if pictured: Avatar { source: root.picture; width: 2 * half; }
+            if title != "": Text { text: root.title; color: root.title-colour; font-weight: 700; vertical-alignment: center; overflow: elide; min-width: min(self.preferred-width, 80px); }
+            if detail != "": Text { text: root.detail; color: root.detail-colour; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+            if says != "": Text { text: "“" + root.says + "”"; color: Dim.text; font-italic: true; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+        }
+    }
+    Rectangle {
+        visible: tabs.length > 0;
+        x: parent.width - self.width - 10px; y: 0; height: 2 * half; width: tab-strip.preferred-width;
+        background: Palette.background;
+        tab-strip := HorizontalLayout {
+            padding-left: 5px; padding-right: 5px; spacing: 6px;
+            for t[i] in root.tabs: HorizontalLayout {
+                spacing: 6px;
+                if i > 0: Text { text: "·"; color: Dim.text; vertical-alignment: center; }
+                Rectangle {
+                    width: label.preferred-width;
+                    label := Text {
+                        width: parent.width; height: parent.height;
+                        text: t + (i == root.marked ? " •" : "");
+                        vertical-alignment: center;
+                        color: i == root.tab ? Palette.accent-background : touch.has-hover ? Palette.foreground : Dim.text;
+                        font-weight: i == root.tab ? 700 : 400;
+                    }
+                    touch := TouchArea { mouse-cursor: i == root.tab ? default : pointer; clicked => { if (i != root.tab) { root.tab-clicked(i); } } }
+                }
+            }
+        }
+    }
+    if note != "": Rectangle {
+        x: parent.width - self.width - 10px; y: parent.height - 2 * half; height: 2 * half; width: note-text.preferred-width + 10px;
+        background: Palette.background;
+        note-text := Text { width: parent.width; height: parent.height; horizontal-alignment: center; text: root.note; color: root.note-colour; font-size: 12px; vertical-alignment: center; }
+    }
+}
+
+// The top of a chat: whose it is (their picture, name, how they are,
+// what they say of themselves), then on the right what can be done
+// there (its children).
+export component ChatHeader inherits HorizontalLayout {
+    in property <string> name;
+    in property <brush> name-colour: Palette.foreground;
+    in property <string> detail;
+    in property <brush> detail-colour: Dim.text;
+    in property <image> picture;
+    in property <bool> pictured;
+    in property <string> says;
+    spacing: 8px; vertical-stretch: 0;
+    if root.pictured: VerticalLayout { alignment: center; Avatar { source: root.picture; width: 36px; } }
+    VerticalLayout {
+        alignment: center; spacing: 1px; horizontal-stretch: 1;
+        Text { text: root.name; color: root.name-colour; font-weight: 700; font-size: 15px; overflow: elide; }
+        HorizontalLayout {
+            spacing: 8px;
+            if root.detail != "": Text { text: root.detail; color: root.detail-colour; font-size: 12px; overflow: elide; }
+            if root.says != "": Text { text: "“" + root.says + "”"; color: Dim.text; font-size: 12px; font-italic: true; overflow: elide; horizontal-stretch: 1; }
+            if root.says == "": Rectangle { horizontal-stretch: 1; }
+        }
+    }
+    VerticalLayout {
+        alignment: center; horizontal-stretch: 0;
+        HorizontalLayout { spacing: 6px; alignment: end; @children }
+    }
+}
+
+// A line of a details view that's a choice: its label in FieldLine's
+// column, then the choice (`current` of `model`).
+export component ChoiceLine inherits HorizontalLayout {
+    in property <string> label;
+    in property <[string]> model;
+    in property <int> current;
+    in property <length> label-width: 100px;
+    callback chosen(int);
+    changed current => { combo.current-index = root.current; }
+    spacing: 12px;
+    Text { text: root.label; color: Dim.text; width: root.label-width; vertical-alignment: center; }
+    combo := ComboBox { model: root.model; current-index: root.current; horizontal-stretch: 1; max-width: 340px; selected => { root.chosen(self.current-index); } }
+}
+
+// How calls are answered, as a ChoiceLine lists them (the controller's
+// SetAnswer), and after how long messages delete themselves
+// (disappearing::CHOICES).
+export global Answering {
+    out property <[string]> choices: ["ring as usual", "answered automatically, voice only", "answered automatically, video too"];
+    out property <[string]> timers: ["kept", "deleted after an hour", "deleted after a day", "deleted after a week"];
+}
+
+// A voice's level, 0 to 1, as a meter shows it (app's meter.rs): green,
+// amber near the top, red at it.
+export component LevelBar inherits Rectangle {
+    in property <float> level;
+    // Over a picture: light on dark, whatever the colours.
+    in property <bool> on-dark;
+    height: 4px;
+    border-radius: 2px;
+    background: on-dark ? #ffffff30 : Palette.foreground.transparentize(88%);
+    Rectangle {
+        x: 0; y: 0; height: parent.height;
+        width: parent.width * clamp(root.level, 0, 1);
+        border-radius: 2px;
+        background: root.level > 0.9 ? #d0443e : root.level > 0.75 ? #e0a020 : #3fae4a;
+    }
+}
+
+// A labelled line of a details view, as the terminal UI's `label  value`.
+export component FieldLine inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> value;
+    in property <length> label-width: 100px;
+    spacing: 12px;
+    Text { text: label; color: Dim.text; width: root.label-width; }
+    TextInput { text: value; read-only: true; single-line: false; color: Palette.foreground; horizontal-stretch: 1; wrap: word-wrap; }
+}
+
+// What a field asks of a phone's keyboard. Each says all three: a
+// field's own default asks for completions of Swarm's own (Android's
+// TYPE_TEXT_FLAG_AUTO_COMPLETE), and the keyboard's suggestions then
+// aren't shown.
+export global Typing {
+    // Writing: capitals for sentences, the keyboard's suggestions, and
+    // its corrections.
+    out property <InputMethodHints> words: { capitalization: CapitalizationMode.sentences, auto-correct: true, auto-complete: false };
+    // A name: suggested, never corrected.
+    out property <InputMethodHints> name: { capitalization: CapitalizationMode.words, auto-correct: false, auto-complete: false };
+    // An address, a key, a rate, a folder, the recovery words: as typed.
+    out property <InputMethodHints> exact: { capitalization: CapitalizationMode.none, auto-correct: false, auto-complete: false };
+}
+
+// A field with its label above: a name, unless it's `exact` (an address,
+// a key, ...: typed as it is).
+export component Labelled inherits VerticalLayout {
+    in property <string> label;
+    in-out property <string> text;
+    in property <bool> exact;
+    spacing: 4px;
+    Text { text: label; color: Dim.text; font-size: 12px; }
+    edit := LineEdit { text <=> root.text; input-method-hints: root.exact ? Typing.exact : Typing.name; }
+    public function focus-it() { edit.focus(); }
+}
+
+// A tab of the top line: lit and underlined while it's the view, and
+// clicking the one that's showing does nothing.
+export component Tab inherits Rectangle {
+    in property <string> text;
+    in property <bool> active;
+    callback clicked();
+    width: label.preferred-width + 20px;
+    background: !active && touch.has-hover ? Palette.foreground.transparentize(93%) : transparent;
+    border-radius: 3px;
+    label := Text {
+        width: parent.width; height: parent.height;
+        text: root.text; vertical-alignment: center; horizontal-alignment: center;
+        color: active ? Palette.foreground : Dim.text;
+        font-weight: active ? 700 : 400;
+    }
+    if active: Rectangle { y: parent.height - 2px; height: 2px; x: 8px; width: parent.width - 16px; background: Palette.accent-background; }
+    touch := TouchArea { mouse-cursor: active ? default : pointer; clicked => { if (!root.active) { root.clicked(); } } }
+}
+
+// A video call's pictures: theirs as large as fits, and in a call of
+// three or more everyone else small beside it (App.strip) — down the left
+// of a stage wider than tall, along the top of one taller (a phone held
+// upright, an upright monitor). The tiles are sized as snapshot.rs's
+// strip_tile has them, which tells the others what to send. top: room
+// kept at the top (a phone's status bar).
+export component CallStage inherits Rectangle {
+    in property <length> top;
+    property <int> spots: App.strip.length;
+    property <bool> wide: root.width >= root.height;
+    property <length> tile-w: spots == 0 ? 0px : wide ? min(root.width / 5, root.height / spots * 16 / 9) : min(root.height / 6 * 16 / 9, root.width / spots);
+    property <length> tile-h: tile-w * 9 / 16;
+    // Theirs, beside the strip: where it starts.
+    out property <length> big-x: spots > 0 && wide ? tile-w : 0px;
+    out property <length> big-y: spots > 0 && !wide ? top + tile-h : 0px;
+    if App.call.remote-note == "": Image {
+        x: big-x; y: big-y; width: root.width - big-x; height: root.height - big-y;
+        source: App.remote-frame; image-fit: contain;
+    }
+    if App.call.remote-note != "": NoPicture {
+        x: big-x; y: big-y; width: root.width - big-x; height: root.height - big-y;
+        note: App.call.remote-note; avatar: App.remote-avatar; pictured: App.call.remote-pictured;
+    }
+    for tile[i] in App.strip: Rectangle {
+        x: wide ? 0px : i * tile-w; y: wide ? i * tile-h : top;
+        width: tile-w; height: tile-h;
+        background: #202020;
+        clip: true;
+        if tile.note == "": Image { source: tile.own ? App.local-frame : tile.picture; image-fit: contain; width: parent.width; height: parent.height; }
+        if tile.note != "": NoPicture {
+            width: parent.width; height: parent.height - 20px;
+            note: tile.pictured ? "" : tile.note; avatar: tile.avatar; pictured: tile.pictured; font-size: 11px;
+        }
+        Rectangle {
+            x: 4px; y: parent.height - self.height - 10px;
+            width: min(parent.width - 8px, label.preferred-width + 8px); height: label.preferred-height + 2px;
+            background: #000000a0; border-radius: 3px;
+            label := Text { x: 4px; width: parent.width - 8px; text: tile.name; color: #ffffff; font-size: 11px; overflow: elide; vertical-alignment: center; }
+        }
+        LevelBar { x: 4px; y: parent.height - 7px; width: parent.width - 8px; on-dark: true; level: App.strip-levels[i]; }
+        Rectangle { border-width: 1px; border-color: #000000; }
+    }
+}
+
+// Your contact line's QR code, and the line, for someone adding you:
+// scanned with their camera, or the line copied to them.
+// A peer's (`theirs`) is the same, from their entry, to pass on.
+export component ContactCode inherits VerticalLayout {
+    in property <length> side: 200px;
+    in property <bool> theirs;
+    spacing: 6px; alignment: start;
+    Text {
+        text: root.theirs ? "Their details at once, to pass on: this code, scanned in someone's Add a contact, or the line under it."
+            : "Or all of it at once: this code, scanned in their Add a contact, or the line under it.";
+        color: Dim.text; wrap: word-wrap;
+    }
+    HorizontalLayout {
+        alignment: start;
+        image := Image {
+            source: root.theirs ? App.pd-qr : App.my-qr; image-rendering: pixelated; width: root.side; height: root.side;
+            TouchArea { mouse-cursor: pointer; clicked => { App.qr-big = root.theirs ? 2 : 1; } }
+        }
+    }
+    Text { text: "Tap the code to show it full screen."; color: Dim.text; font-size: 11px; wrap: word-wrap; }
+    TextInput { text: root.theirs ? App.pd.contact : App.me.contact; read-only: true; color: Palette.foreground; wrap: char-wrap; font-size: 11px; }
+    if !root.theirs: Text { text: "Anyone who sees the code, in a screenshot or a video call, sees your addresses."; color: Dim.text; font-size: 11px; wrap: word-wrap; }
+}
+
+// The camera, reading a QR code: Add a peer's form's filled from it once
+// it's read; for another of your devices (`device`), its addresses are
+// added and tried.
+export component CodeScanner inherits VerticalLayout {
+    in property <bool> device;
+    spacing: 6px; alignment: start;
+    if !App.me.scanning: HorizontalLayout {
+        alignment: start;
+        Button {
+            text: root.device ? "Scan its code" : "Scan a QR code";
+            enabled: !App.call.video-shown;
+            clicked => { if (root.device) { App.scan-device(); } else { App.scan(true); } }
+        }
+    }
+    if App.me.scanning: Rectangle {
+        height: self.width * 9 / 16;
+        background: #202020;
+        Image { source: App.preview-frame; image-fit: contain; width: parent.width; height: parent.height; }
+    }
+    if App.me.scanning: HorizontalLayout {
+        spacing: 8px;
+        Text { text: root.device ? "Hold its code, under You on that device, up to the camera." : "Hold their code up to the camera."; color: Dim.text; vertical-alignment: center; horizontal-stretch: 1; wrap: word-wrap; }
+        Button { text: "Stop"; clicked => { App.scan(false); } }
+    }
+}
+
+export component CallButton inherits Rectangle {
+    in property <string> text;
+    // 0 plain (off), 1 asking or held up (amber), 2 ending, 3 on (green).
+    in property <int> tone;
+    // Over the picture: light on dark, whatever the colours.
+    in property <bool> on-dark;
+    // Room either side of the word: less where a row's tight.
+    in property <length> sides: 14px;
+    // Why it can't be used now ("" : it can): greyed, and saying so to
+    // the mouse over it (a tap, on the phone), as a setting's help does.
+    in property <string> why;
+    // Its key (`m`, `Esc`), shown to the mouse over it when it can be used.
+    in property <string> shortcut;
+    callback clicked();
+    height: 30px;
+    width: label.preferred-width + 2 * sides;
+    border-radius: 4px;
+    border-width: tone == 0 ? 1px : 0px;
+    border-color: on-dark ? #ffffff50 : Dim.rule;
+    background: tone == 2 ? (touch.has-hover ? #b5332e : #d0443e)
+        : tone == 1 ? (touch.has-hover ? #a07408 : #b7860b)
+        : tone == 3 ? (touch.has-hover ? #217a3c : #2a9148)
+        : on-dark ? (touch.has-hover ? #ffffff40 : #ffffff20)
+        : touch.has-hover ? Palette.foreground.transparentize(90%) : Palette.foreground.transparentize(96%);
+    label := Text { width: parent.width; height: parent.height; text: root.text; vertical-alignment: center; horizontal-alignment: center; color: root.why != "" ? (root.on-dark ? #ffffff70 : Dim.text) : root.tone == 0 && !root.on-dark ? Palette.foreground : #ffffff; font-weight: 600; }
+    touch := TouchArea {
+        mouse-cursor: root.why == "" ? MouseCursor.pointer : MouseCursor.default;
+        clicked => { if (root.why == "") { if (Tip.text == root.shortcut) { Tip.text = ""; } root.clicked(); } else if (Look.phone) { Tip.show(root.why, root.absolute-position.x, root.absolute-position.y, root.height); } }
+        changed has-hover => { if (!Look.phone) { Tip.hover(self.has-hover, root.why != "" ? root.why : root.shortcut, root.absolute-position.x, root.absolute-position.y, root.height); } }
+    }
+}
+
+// A button that can't be used now says why: greyed, with `why` shown to
+// the mouse over it (a tap, on the phone), as a setting's help is.
+export component WhyButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> primary;
+    // "" : it can be used.
+    in property <string> why;
+    callback clicked();
+    min-width: b.min-width; preferred-width: b.preferred-width;
+    min-height: b.min-height; preferred-height: b.preferred-height;
+    horizontal-stretch: 0; vertical-stretch: 0;
+    b := Button { width: parent.width; height: parent.height; text: root.text; primary: root.primary; enabled: root.why == ""; clicked => { root.clicked(); } }
+    if root.why != "": TouchArea {
+        clicked => { if (Look.phone) { Tip.show(root.why, root.absolute-position.x, root.absolute-position.y, root.height); } }
+        changed has-hover => { if (!Look.phone) { Tip.hover(self.has-hover, root.why, root.absolute-position.x, root.absolute-position.y, root.height); } }
+    }
+}
+
+// One key hint: the key in the accent colour, what it does dimmed, a dot
+// before it; clicked, it's that key pressed.
+export component HintItem inherits Rectangle {
+    in property <Hint> hint;
+    in property <bool> first;
+    callback press(string);
+    min-width: row.preferred-width;
+    background: hint.press != "" && touch.has-hover ? Palette.foreground.transparentize(92%) : transparent;
+    border-radius: 3px;
+    row := HorizontalLayout {
+        padding-left: 4px; padding-right: 4px; spacing: 5px;
+        if !first: Text { text: "·"; color: Dim.text; vertical-alignment: center; }
+        Text { text: hint.key; color: hint.dim ? Dim.text : Palette.accent-background; vertical-alignment: center; font-weight: 600; }
+        Text { text: hint.what; color: hint.dim ? Dim.rule : Dim.text; vertical-alignment: center; }
+    }
+    touch := TouchArea { enabled: hint.press != "" && !hint.dim; mouse-cursor: pointer; clicked => { root.press(hint.press); } }
+}
+
+// A chat line's text with its web addresses as links, laid over the
+// same text plain (drawn see-through, for selecting or a long press):
+// clicking one opens it in the browser.
+component Links inherits StyledText {
+    link-color: Roles.link;
+    link-clicked(url) => { App.open-link(url); }
+}
+
+// A chat: day headings, then the time, a column of names, a rule, and
+// the text wrapped beside it — as the terminal UI lays it out. The name
+// column is as wide as the longest name there measures (to a limit;
+// longer ones are cut), so nothing runs into anything else. A chat opens
+// at its newest lines, and new ones only scroll it if the newest was
+// showing.
+export component Chat inherits Rectangle {
+    in property <[ChatLine]> lines;
+    in property <string> widest-name;
+    in property <bool> show-times: true;
+    // What an empty one says.
+    in property <string> empty;
+    // Which chat this is: another opens at its newest lines.
+    in property <string> key;
+    // Paging from the keys: each change of the token pages once, in
+    // `page-dir`'s direction.
+    in property <int> page-token;
+    in property <int> page-dir;
+    // On a touch screen: a long press copies a line's whole text (there's
+    // no picking out part of it there), or, on a line that can be
+    // deleted, asks Copy or Delete. With a mouse, as in a text editor:
+    // dragging over messages selects their text from the character
+    // pressed on to the one let go on, across lines (a double click, by
+    // words; a triple click, whole messages; Shift and a click, on to
+    // there); dragging from a time or name selects whole lines. Ctrl+C or
+    // a right-click copies it: the text alone, or whole lines with their
+    // day's heading, times and names. A click elsewhere or Esc lets go.
+    in property <bool> touch;
+    // A key a line doesn't use, for the window's own (and the keyboard
+    // given back to them).
+    callback key-given-back(string);
+    out property <bool> scrolled-back: !following;
+    out property <bool> overflows: list.content-height > list.visible-height + 1px;
+    changed page-token => { page(page-dir); }
+    changed key => { following = true; settling = 0; sel-kind = 0; to-bottom(); }
+    property <int> sel-kind: 0;
+    property <int> unit: 1;
+    property <int> anchor-row;
+    property <int> anchor-start;
+    property <int> anchor-end;
+    property <int> focus-row;
+    property <int> focus-start;
+    property <int> focus-end;
+    property <bool> dragging;
+    property <length> drag-x;
+    property <length> drag-y;
+    property <length> drag-y-in: max(list.absolute-position.y + 1px, min(list.absolute-position.y + list.visible-height - 1px, drag-y));
+    property <duration> last-press;
+    property <length> last-press-x;
+    property <length> last-press-y;
+    property <int> clicks;
+    property <string> top-line: lines.length > 0 ? lines[0].time + lines[0].text : "";
+    changed top-line => { sel-kind = 0; dragging = false; }
+    pure function forward() -> bool { return focus-row > anchor-row || (focus-row == anchor-row && focus-start >= anchor-start); }
+    pure function lo-row() -> int { return forward() ? anchor-row : focus-row; }
+    pure function hi-row() -> int { return forward() ? focus-row : anchor-row; }
+    pure function lo-off() -> int { return forward() ? anchor-start : focus-start; }
+    pure function hi-off() -> int { return forward() ? focus-end : anchor-end; }
+    pure function in-sel(i: int) -> bool { return sel-kind != 0 && i >= lo-row() && i <= hi-row(); }
+    pure function something() -> bool { return sel-kind == 2 || (sel-kind == 1 && (lo-row() != hi-row() || lo-off() != hi-off())); }
+    // Line `i`'s text selected, as "from,to" ("" for none).
+    pure function text-sel(i: int) -> string {
+        if (sel-kind != 1 || !in-sel(i)) { return ""; }
+        let from = i == lo-row() ? lo-off() : 0;
+        let to = i == hi-row() ? hi-off() : 1000000000;
+        return from < to ? from + "," + to : "";
+    }
+    // A press: how many clicks it is (1-3).
+    function count-click(x: length, y: length) -> int {
+        clicks = animation-tick() - last-press < 500ms && abs(x - last-press-x) < 4px && abs(y - last-press-y) < 4px ? mod(clicks, 3) + 1 : 1;
+        last-press = animation-tick();
+        last-press-x = x;
+        last-press-y = y;
+        return clicks;
+    }
+    // Pressed on line `i`'s text at (x, y) in the window.
+    function press-text(i: int, x: length, y: length, shift: bool) {
+        picker.focus();
+        let n = count-click(x, y);
+        if (shift && sel-kind == 1) {
+            let at = App.text-span-at(x, y, 1);
+            unit = 1; focus-row = i; focus-start = at.start; focus-end = at.end;
+        } else {
+            unit = n;
+            let at = App.text-span-at(x, y, n);
+            sel-kind = 1;
+            anchor-row = i; anchor-start = at.start; anchor-end = at.end;
+            focus-row = i; focus-start = at.start; focus-end = at.end;
+        }
+        drag-x = x; drag-y = y; dragging = true;
+    }
+    // Pressed on line `i`'s time or name.
+    function press-line(i: int, x: length, y: length, shift: bool) {
+        picker.focus();
+        if (shift && sel-kind == 2) {
+            focus-row = i;
+        } else if (sel-kind == 2 && anchor-row == i && focus-row == i) {
+            sel-kind = 0;
+            return;
+        } else {
+            sel-kind = 2; anchor-row = i; focus-row = i;
+            anchor-start = 0; anchor-end = 0; focus-start = 0; focus-end = 0;
+        }
+        drag-x = x; drag-y = y; dragging = true;
+    }
+    function copy-selected() {
+        if (sel-kind == 2) { root.copy(App.chat-text(anchor-row, focus-row)); }
+        if (sel-kind == 1 && something()) { root.copy(App.chat-selection(lo-row(), lo-off(), hi-row(), hi-off())); }
+    }
+    Timer {
+        interval: 40ms;
+        running: root.dragging && root.drag-y != root.drag-y-in;
+        triggered => {
+            if (root.drag-y < root.drag-y-in) {
+                list.content-y = min(0px, list.content-y + max(4px, root.drag-y-in - root.drag-y));
+            } else {
+                list.content-y = max(min(0px, list.visible-height - list.content-height), list.content-y - max(4px, root.drag-y - root.drag-y-in));
+            }
+            root.following = root.at-bottom();
+        }
+    }
+    picker := FocusScope {
+        width: 0px; height: 0px;
+        key-pressed(event) => {
+            if (event.modifiers.control && (event.text == "c" || event.text == "C") && root.something()) {
+                root.copy-selected();
+                return accept;
+            }
+            if (event.text == Key.Escape) { root.sel-kind = 0; root.key-given-back(""); return accept; }
+            if (event.text == Key.UpArrow || event.text == Key.DownArrow || event.text == Key.PageUp || event.text == Key.PageDown) {
+                root.key-given-back(event.text);
+                return accept;
+            }
+            return reject;
+        }
+    }
+    property <bool> following: true;
+    property <int> settling;
+    property <int> most-settling: 40;
+    property <string> newest-line: lines.length + ":" + (lines.length > 0 ? lines[lines.length - 1].text : "");
+    changed newest-line => { settling = 0; }
+    Timer { interval: 1s; running: root.settling > 0 && root.settling < root.most-settling; triggered => { root.settling = 0; } }
+    clip: true;
+    names := Text { text: root.widest-name; font-weight: 600; visible: false; }
+    times := Text { text: "00:00"; visible: false; }
+    property <length> name-width: min(max(names.preferred-width, 12px), 220px);
+    // Narrow (a phone upright): a message's name and time on a line of
+    // their own above it, once a run, and the text the whole width; no
+    // column of names. Wider (the desktop, a car's screen), the columns.
+    in property <length> stacked-below: 480px;
+    out property <bool> stacked: root.width < root.stacked-below;
+
+    list := ListView {
+        scrolled => { root.following = root.at-bottom(); }
+        changed content-height => { if (root.following && root.settling < root.most-settling) { root.settling += 1; root.to-bottom(); } }
+        changed visible-height => { if (root.following && root.settling < root.most-settling) { root.to-bottom(); } }
+        for line[i] in lines: line-row := Rectangle {
+            height: row.preferred-height;
+            property <bool> picked: root.sel-kind == 2 && (root.in-sel(i) || (line.kind == LineKind.day && i == App.chat-day-of(root.lo-row())));
+            background: self.picked ? Palette.selection-background.transparentize(40%) : line.for-me ? Roles.mention : transparent;
+            property <bool> under: root.dragging && root.drag-y-in >= self.absolute-position.y && root.drag-y-in < self.absolute-position.y + self.height;
+            changed under => { if (self.under) { root.focus-row = i; } }
+            opacity: line.deleting ? 0.45 : 1;
+            menu := ContextMenuArea {
+            property <bool> deletable: line.refs != "" && !line.deleting;
+            enabled: line.kind != LineKind.day && (deletable || !root.touch);
+            Menu {
+                MenuItem { title: "Copy"; activated => { if (root.something()) { root.copy-selected(); } else { root.copy(line.text); } } }
+                if !root.touch: MenuItem {
+                    title: "Copy with time and name";
+                    activated => {
+                        if (root.something() && root.in-sel(i)) { root.copy(App.chat-text(root.lo-row(), root.hi-row())); } else { root.copy(App.chat-text(i, i)); }
+                    }
+                }
+                if menu.deletable: MenuItem { title: "Delete"; activated => { App.delete-line(line.refs); } }
+            }
+            if !root.touch && line.kind != LineKind.day: TouchArea {
+                pointer-event(event) => {
+                    if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+                        menu.show({ x: self.absolute-position.x - menu.absolute-position.x + self.mouse-x, y: self.absolute-position.y - menu.absolute-position.y + self.mouse-y });
+                    }
+                    if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                        root.press-line(i, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y, event.modifiers.shift);
+                    }
+                    if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) { root.dragging = false; }
+                }
+                moved => { root.drag-x = self.absolute-position.x + self.mouse-x; root.drag-y = self.absolute-position.y + self.mouse-y; }
+            }
+            row := VerticalLayout {
+                padding-left: 6px; padding-right: 14px;
+                padding-top: line.kind == LineKind.day ? 10px : root.stacked && line.kind == LineKind.said && line.first ? 8px : 2px;
+                padding-bottom: line.kind == LineKind.day ? 6px : 2px;
+                spacing: 1px;
+                if root.stacked && line.kind == LineKind.said && line.first: HorizontalLayout {
+                    spacing: 8px;
+                    Text {
+                        text: line.name; overflow: elide; min-width: 0px;
+                        color: Roles.colour(line.role); font-weight: 600;
+                    }
+                    if show-times: Text { text: line.time; color: Dim.text; font-size: 12px; vertical-alignment: center; }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+            inner := HorizontalLayout {
+                spacing: 8px;
+                if line.kind == LineKind.day: HorizontalLayout {
+                    alignment: center; spacing: 10px; horizontal-stretch: 1;
+                    Rectangle { min-width: 0px; preferred-width: 100px; max-width: 100px; horizontal-stretch: 1; Rectangle { y: parent.height / 2; height: 1px; background: Dim.rule; } }
+                    Text { text: line.text; color: line-row.picked ? Palette.foreground : Dim.text; font-size: 12px; overflow: elide; min-width: 0px; }
+                    Rectangle { min-width: 0px; preferred-width: 100px; max-width: 100px; horizontal-stretch: 1; Rectangle { y: parent.height / 2; height: 1px; background: Dim.rule; } }
+                }
+                if line.kind != LineKind.day && show-times && !(root.stacked && line.kind == LineKind.said): Text { text: line.time; color: line-row.picked ? Palette.foreground : Dim.text; width: times.preferred-width; }
+                if line.kind != LineKind.day && (!root.stacked || line.kind == LineKind.happened): Text {
+                    text: line.name; width: root.stacked ? self.preferred-width : root.name-width; horizontal-alignment: right; overflow: elide;
+                    color: line-row.picked ? Palette.foreground : line.kind == LineKind.happened ? Dim.text : line.kind == LineKind.did ? Roles.did : Roles.colour(line.role);
+                    font-weight: line.kind == LineKind.happened ? 400 : 600;
+                }
+                if line.kind != LineKind.day && !root.stacked: Rectangle { width: 1px; background: Dim.rule; }
+                if line.kind != LineKind.day && !root.touch: said-text := TextInput {
+                    text: line.text; read-only: true; single-line: false; wrap: word-wrap; horizontal-stretch: 1;
+                    property <string> selected: root.text-sel(i);
+                    changed selected => { self.show-selected(); }
+                    init => { self.show-selected(); }
+                    function show-selected() {
+                        if (self.selected == "") {
+                            self.set-selection-offsets(0, 0);
+                        } else {
+                            self.set-selection-offsets(root.lo-row() == i ? root.lo-off() : 0, root.hi-row() == i ? root.hi-off() : 1000000000);
+                        }
+                    }
+                    property <string> pointer-here: line-row.under && root.sel-kind == 1 ? root.drag-x / 1px + "," + root.drag-y-in / 1px : "";
+                    changed pointer-here => {
+                        if (self.pointer-here != "") {
+                            let at = App.text-span-at(
+                                max(self.absolute-position.x, min(self.absolute-position.x + self.width - 1px, root.drag-x)),
+                                max(self.absolute-position.y, min(self.absolute-position.y + self.height - 1px, root.drag-y-in)),
+                                root.unit);
+                            if (at.start >= 0) { root.focus-row = i; root.focus-start = at.start; root.focus-end = at.end; }
+                        }
+                    }
+                    color: line-row.picked ? Palette.foreground : line.linked && self.selected == "" ? transparent : root.text-colour(line.kind);
+                    font-italic: line.kind == LineKind.did;
+                    selection-background-color: Palette.selection-background;
+                    selection-foreground-color: Palette.selection-foreground;
+                    key-pressed(event) => {
+                        if (event.text == Key.Escape) { root.key-given-back(""); return accept; }
+                        if (!event.modifiers.shift && (event.text == Key.UpArrow || event.text == Key.DownArrow || event.text == Key.PageUp || event.text == Key.PageDown)) {
+                            root.key-given-back(event.text);
+                            return accept;
+                        }
+                        return reject;
+                    }
+                    TouchArea {
+                        mouse-cursor: text;
+                        pointer-event(event) => {
+                            if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+                                menu.show({ x: self.absolute-position.x - menu.absolute-position.x + self.mouse-x, y: self.absolute-position.y - menu.absolute-position.y + self.mouse-y });
+                            }
+                            if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                                root.press-text(i, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y, event.modifiers.shift);
+                            }
+                            if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) { root.dragging = false; }
+                        }
+                        moved => { root.drag-x = self.absolute-position.x + self.mouse-x; root.drag-y = self.absolute-position.y + self.mouse-y; }
+                    }
+                    if line.linked && said-text.selected == "" && !line-row.picked: Links { width: parent.width; height: parent.height; text: line.rich; default-color: root.text-colour(line.kind); }
+                }
+                if line.kind != LineKind.day && root.touch: said := Text {
+                    text: line.text; wrap: word-wrap; horizontal-stretch: 1;
+                    color: line.linked ? transparent : root.text-colour(line.kind);
+                    font-italic: line.kind == LineKind.did;
+                    property <bool> long-pressed;
+                    press := TouchArea {
+                        pointer-event(event) => { if (event.kind == PointerEventKind.down) { said.long-pressed = false; } }
+                    }
+                    if line.linked: Links { width: parent.width; height: parent.height; text: line.rich; default-color: root.text-colour(line.kind); }
+                    Timer {
+                        interval: 500ms; running: press.pressed && !said.long-pressed;
+                        triggered => {
+                            said.long-pressed = true;
+                            if (menu.enabled) {
+                                menu.show({ x: inner.x + said.x + press.pressed-x, y: inner.y + said.y + press.pressed-y });
+                            } else {
+                                root.copy(line.text);
+                            }
+                        }
+                    }
+                }
+                if line.mark != "": Text {
+                    text: line.mark; font-size: 10px; color: Dim.text.transparentize(30%);
+                    vertical-alignment: bottom; width: 10px; horizontal-alignment: center;
+                }
+            }
+            }
+            }
+        }
+    }
+    Rectangle { height: 0px; copier := TextInput { read-only: true; visible: false; } }
+    if copied: Rectangle {
+        x: (parent.width - self.width) / 2; y: parent.height - self.height - 8px;
+        width: copied-text.preferred-width + 20px; height: copied-text.preferred-height + 10px;
+        border-radius: 4px; background: Palette.accent-background;
+        copied-text := Text { text: "Copied"; color: Palette.accent-foreground; }
+    }
+    Timer { interval: 1500ms; running: root.copied; triggered => { root.copied = false; } }
+    if lines.length == 0 && empty != "": Text {
+        y: parent.height - self.height - 6px; width: parent.width;
+        text: root.empty; color: Dim.text; horizontal-alignment: center;
+    }
+    init => { to-bottom(); }
+    pure function text-colour(kind: LineKind) -> brush {
+        return kind == LineKind.happened ? Dim.text : kind == LineKind.did ? Roles.did : kind == LineKind.missed ? Roles.missed : Palette.foreground;
+    }
+    // What's copied, for the tests.
+    out property <bool> copied;
+    function copy(text: string) {
+        copier.text = text;
+        copier.select-all();
+        copier.copy();
+        copied = true;
+    }
+    public function to-bottom() { list.content-y = min(0px, list.visible-height - list.content-height); }
+    // Right at the bottom: any way up from it, however small (a smooth
+    // wheel or touchpad moves a few pixels at a time), stops it following
+    // — near enough would have it pulled back as the rows above are
+    // measured, and the wheel could never get it away.
+    function at-bottom() -> bool { return list.content-y <= list.visible-height - list.content-height + 1px; }
+    // A page up (-1) or down (1), less a line so the reader keeps their place.
+    public function page(direction: int) {
+        list.content-y = max(min(0px, list.visible-height - list.content-height), min(0px, list.content-y - direction * (list.visible-height - 20px)));
+        following = at-bottom();
+    }
+}
+
+// Where text is typed, in a panel of its own: Enter sends (`send`), Shift+Enter
+// starts a new line, Esc stops typing (back to the keys), Tab is passed on.
+export component TypingBox inherits Panel {
+    in property <bool> enabled: true;
+    in property <string> placeholder;
+    in-out property <string> text;
+    // Enter sends; otherwise (a post) it's a new line.
+    in property <bool> enter-sends: true;
+    in property <length> lines-high: 120px;
+    out property <bool> typing: edit.has-focus;
+    callback send(string);
+    callback done-typing();
+    callback tab-pressed();
+    // Tab: the text with the name at its end completed, "" if none fits
+    // (then it's `tab-pressed`). Left alone, nothing's completed.
+    callback complete(string) -> string;
+    // Each change takes the keyboard (from Enter in the window).
+    in property <int> focus-token;
+    changed focus-token => { edit.focus(); }
+    active: edit.has-focus;
+    inner: 8px;
+    vertical-stretch: 0;
+    keys := FocusScope {
+        min-height: min(root.lines-high, max(edit.preferred-height, 20px));
+        max-height: self.min-height;
+        capture-key-pressed(event) => {
+            if (event.text == Key.Return && !event.modifiers.shift && root.enter-sends) {
+                if (root.text != "") { root.send(root.text); root.text = ""; }
+                return accept;
+            }
+            if (event.text == Key.Escape) { root.done-typing(); return accept; }
+            if (event.text == Key.Tab && !event.modifiers.shift) {
+                let done = root.complete(root.text);
+                if (done != "") {
+                    root.text = done;
+                    edit.set-selection-offsets(2147483647, 2147483647);
+                    return accept;
+                }
+                root.tab-pressed();
+                return accept;
+            }
+            if (event.text == Key.Tab) { root.tab-pressed(); return accept; }
+            return reject;
+        }
+        flick := Flickable {
+            width: parent.width; height: parent.height;
+            content-height: max(self.height, edit.preferred-height);
+            edit := TextInput {
+                width: parent.width; height: max(flick.height, self.preferred-height);
+                text <=> root.text; enabled: root.enabled; wrap: word-wrap; single-line: false;
+                input-method-hints: Typing.words;
+                color: Palette.foreground;
+                selection-background-color: Palette.selection-background;
+                selection-foreground-color: Palette.selection-foreground;
+                changed text => { flick.content-y = min(0px, flick.height - edit.preferred-height); }
+            }
+        }
+        if root.text == "": Text { width: parent.width; text: root.placeholder; color: Dim.text; vertical-alignment: top; }
+        TouchArea { width: parent.width; height: parent.height; mouse-cursor: MouseCursor.text; clicked => { edit.focus(); } enabled: !edit.has-focus; }
+    }
+    public function focus-it() { edit.focus(); }
+}
+
+// A list of posts, newest first: when, then the text. As a chat's lines
+// are, the text's picked out with the mouse and copied with Ctrl+C, or on
+// a touch screen long-pressed to copy it whole; a web address in it is a
+// link.
+export component PostList inherits Rectangle {
+    in property <[PostItem]> posts;
+    in property <string> note;
+    in property <string> empty;
+    in property <bool> touch;
+    // A key a post doesn't use, for the window's own (as Chat's).
+    callback key-given-back(string);
+    scroll := ScrollView {
+        VerticalLayout {
+            padding-right: 12px; spacing: 10px; alignment: start;
+            if note != "": Text { text: note; color: Dim.text; font-italic: true; wrap: word-wrap; }
+            if posts.length == 0 && empty != "": Text { text: empty; color: Dim.text; }
+            for p in posts: menu := ContextMenuArea {
+              enabled: p.refs != "";
+              Menu {
+                if root.touch: MenuItem { title: "Copy"; activated => { root.copy(p.text); } }
+                MenuItem { title: "Delete"; activated => { App.delete-post(p.refs); } }
+              }
+              VerticalLayout {
+                spacing: 2px;
+                Text { text: p.when; color: Dim.text; font-size: 12px; }
+                if !root.touch: TextInput {
+                    text: p.text; read-only: true; single-line: false; wrap: word-wrap;
+                    color: p.linked ? transparent : Palette.foreground;
+                    selection-background-color: Palette.selection-background;
+                    selection-foreground-color: Palette.selection-foreground;
+                    key-pressed(event) => {
+                        if (event.text == Key.Escape) { root.key-given-back(""); return accept; }
+                        if (!event.modifiers.shift && (event.text == Key.UpArrow || event.text == Key.DownArrow || event.text == Key.PageUp || event.text == Key.PageDown)) {
+                            root.key-given-back(event.text);
+                            return accept;
+                        }
+                        return reject;
+                    }
+                    if p.linked: Links { width: parent.width; height: parent.height; text: p.rich; default-color: Palette.foreground; }
+                }
+                if root.touch: said := Text {
+                    text: p.text; wrap: word-wrap;
+                    color: p.linked ? transparent : Palette.foreground;
+                    property <bool> long-pressed;
+                    press := TouchArea {
+                        pointer-event(event) => { if (event.kind == PointerEventKind.down) { said.long-pressed = false; } }
+                    }
+                    if p.linked: Links { width: parent.width; height: parent.height; text: p.rich; default-color: Palette.foreground; }
+                    Timer {
+                        interval: 500ms; running: press.pressed && !said.long-pressed;
+                        triggered => {
+                            said.long-pressed = true;
+                            if (menu.enabled) {
+                                menu.show({ x: said.x + press.pressed-x, y: said.y + press.pressed-y });
+                            } else {
+                                root.copy(p.text);
+                            }
+                        }
+                    }
+                }
+              }
+            }
+        }
+    }
+    Rectangle { height: 0px; copier := TextInput { read-only: true; visible: false; } }
+    if copied: Rectangle {
+        x: (parent.width - self.width) / 2; y: parent.height - self.height - 8px;
+        width: copied-text.preferred-width + 20px; height: copied-text.preferred-height + 10px;
+        border-radius: 4px; background: Palette.accent-background;
+        copied-text := Text { text: "Copied"; color: Palette.accent-foreground; }
+    }
+    Timer { interval: 1500ms; running: root.copied; triggered => { root.copied = false; } }
+    // What's copied, for the tests.
+    out property <bool> copied;
+    function copy(text: string) {
+        copier.text = text;
+        copier.select-all();
+        copier.copy();
+        copied = true;
+    }
+}
+
+// A dialog over the window, like the terminal UI's cards: its title set
+// in the frame, its contents, its buttons.
+export component Dialog inherits Rectangle {
+    in property <string> title;
+    in property <brush> colour: Palette.accent-background;
+    // Its frame flashing, half a second on and half off, for attention.
+    in property <bool> flash: false;
+    property <bool> lit: !flash || mod(animation-tick() / 1ms, 1000) < 500;
+    background: #00000040;
+    TouchArea { }
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 3;
+        width: min(parent.width - 40px, 480px);
+        height: card.preferred-height;
+        card := Panel {
+            fill: Palette.background; raised: true; centred: true;
+            title: root.title; title-colour: root.colour;
+            frame-colour: lit ? root.colour : Dim.rule;
+            inner: 16px;
+            VerticalLayout {
+                spacing: 12px;
+                @children
+            }
+        }
+    }
+}
+
+// Picking a contact by typing (to add to a call or a group, or to start
+// a group with the contact whose chat is open): up to five whose names
+// match (App.picks), Enter taking the first. Never a list of everyone:
+// there can be many.
+export component Picker inherits Dialog {
+    // 1: to add to the call; 2: to add to the group open; 3: to start a
+    // group with the contact open.
+    in property <int> kind;
+    callback chose(string);
+    callback close();
+    property <string> typed;
+    init => { App.pick(root.kind, ""); edit.focus(); }
+    FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Escape) { App.pick(0, ""); root.close(); return accept; }
+            return reject;
+        }
+        VerticalLayout {
+            spacing: 6px;
+            edit := LineEdit {
+                placeholder-text: "Type a name";
+                input-method-hints: Typing.name;
+                text <=> root.typed;
+                edited(t) => { App.pick(root.kind, t); }
+                accepted => { if (App.picks.length > 0) { App.pick(0, ""); root.chose(App.picks[0]); } }
+            }
+            for name[i] in App.picks: Rectangle {
+                height: Look.phone ? 44px : 30px;
+                border-radius: 3px;
+                background: touch.has-hover || (i == 0 && root.typed != "") ? Palette.selection-background : transparent;
+                Text {
+                    x: 10px; height: parent.height; vertical-alignment: center; text: name;
+                    color: touch.has-hover || (i == 0 && root.typed != "") ? Palette.selection-foreground : Palette.foreground;
+                }
+                touch := TouchArea { mouse-cursor: pointer; clicked => { App.pick(0, ""); root.chose(name); } }
+            }
+            if App.picks.length == 0: Text {
+                text: root.typed == "" ? (root.kind == 1 ? "Nobody else can be added now." : "All your contacts are in it.") : "Nobody of that name.";
+                color: Dim.text;
+            }
+            HorizontalLayout {
+                alignment: end;
+                Button { text: "Cancel"; clicked => { App.pick(0, ""); root.close(); } }
+            }
+        }
+    }
+}
+
+// The views, as tabs: on the top line, or under it when the window's too
+// narrow for them beside the rest.
+export component Tabs inherits HorizontalLayout {
+    in property <Pane> view;
+    callback go(Pane);
+    spacing: 2px; padding-top: 4px; padding-bottom: 4px;
+    Tab { text: "Contacts"; active: view == Pane.peers || view == Pane.channels; clicked => { root.go(Pane.peers); } }
+    Tab { text: "Chats"; active: Panes.chats(view); clicked => { root.go(Pane.mine); } }
+    Tab { text: "Transfers"; active: view == Pane.transfers; clicked => { root.go(Pane.transfers); } }
+    Tab { text: "Settings"; active: view == Pane.settings; clicked => { root.go(Pane.settings); } }
+    Tab { text: "Help"; active: view == Pane.help; clicked => { root.go(Pane.help); } }
+}
+
+// The manual (Help): a line of its contents, which page it opens
+// (`target`, a section of swarm_app's manual), a chapter (level 1) or a
+// section (2), the one open lit.
+export struct HelpRow {
+    number: string,
+    title: string,
+    level: int,
+    selected: bool,
+    target: int,
+}
+
+// What a piece of a manual's page is.
+export enum HelpKind { title, section, subsection, heading, para, bullet, under, step, command, table-head, table-row, picture, links }
+
+// A piece of a manual's page: its text (a table's first column), a
+// table's second; as plain text (a title, a step's number, a command);
+// a picture, its height over its width, and what it shows (in plain);
+// for a table, whether its first column is a wide one (commands).
+export struct HelpBlock {
+    kind: HelpKind,
+    text: styled-text,
+    second: styled-text,
+    plain: string,
+    picture: image,
+    ratio: float,
+    wide: bool,
+}
+
+// What the controller shows and what it's told: one for every window
+// (the desktop's, the phone's), so the controller drives either.
+// The Contacts view: the contact chosen.
+export struct PeerDetails {
+    shown: bool,
+    name: string,
+    status: string,
+    says: string,
+    pictured: bool,
+    address: string,
+    key: string,
+    contact: string,
+    cover: string,
+    cover-setting: string,
+    calls: string,
+    answer-index: int,
+    timer-index: int,
+    control: bool,
+    files: string,
+    receive: string,
+    me: bool,
+    request: bool,
+}
+
+// Someone asking to be added: what they're called, their key, where
+// they're from, and the name suggested for them.
+export struct RequestDetails {
+    label: string,
+    key: string,
+    address: string,
+    suggested: string,
+}
+
+// A group's details: the group chosen.
+export struct ChannelDetails {
+    shown: bool,
+    name: string,
+    members: string,
+    named: bool,
+}
+
+// Settings, as they stand: each a switch or the place chosen in its list.
+export struct SettingsShown {
+    text-size: int,
+    times: bool,
+    utc: bool,
+    joins: bool,
+    order: int,
+    echo: bool,
+    noise: bool,
+    level: bool,
+    video-size: int,
+    lock-index: int,
+    call-info: bool,
+    notify: int,
+    sound-name: string,
+    ringtone-name: string,
+    microphone-index: int,
+    speaker-index: int,
+    camera-index: int,
+    zone-text: string,
+}
+
+// Whatever's asking for an answer: a call ringing, a file offered, a
+// question.
+export struct Asking {
+    ring-shown: bool,
+    ring-from: string,
+    ring-video: bool,
+    ring-seconds: int,
+    offer-shown: bool,
+    offer-who: string,
+    offer-name: string,
+    offer-size: string,
+    confirm-shown: bool,
+    confirm-question: string,
+    confirm-delete: bool,
+    confirm-request: bool,
+}
+
+// The peer whose chat is open.
+export struct PeerShown {
+    name: string,
+    status: string,
+    says: string,
+    pictured: bool,
+    state: PeerState,
+    asked: bool,
+    tab: int,
+    new-posts: bool,
+    posts-note: string,
+}
+
+// The chat open (its lines are App.lines): its names (one per line, to
+// size the name column by the widest), which it
+// is, what it says while empty, and whether times show.
+export struct ChatShown {
+    widest-name: string,
+    key: string,
+    empty: string,
+    show-times: bool,
+}
+
+// The group open: what it's called, what's said under that (how many
+// are in it).
+export struct ChannelShown {
+    name: string,
+    detail: string,
+}
+
+// The call: what the top line says, whether it's under way, and what's
+// shown of it (its pictures, levels, strip and members are App's own).
+export struct CallShown {
+    text: string,
+    live: bool,
+    add-to-call: string,
+    call-why: string,
+    video-why: string,
+    muted: bool,
+    calling-out: bool,
+    can-camera: bool,
+    video-shown: bool,
+    local-on: bool,
+    sharing: bool,
+    control-asking: string,
+    control-asking-screen: bool,
+    controlled-by: string,
+    control-paused: bool,
+    controlling: string,
+    control-state: Controlling,
+    can-control: bool,
+    remote-note: string,
+    remote-pictured: bool,
+    video-info: string,
+}
+
+// The top line and the status line: who you are, how many are online,
+// files under way, the time, and what just happened.
+export struct TopLine {
+    name: string,
+    online: string,
+    progress-what: string,
+    progress-percent: string,
+    progress-speed: string,
+    progress-left: string,
+    progress: float,
+    clock: string,
+    status: string,
+    status-kind: NoteKind,
+}
+
+// You: your name, status, key and contact line; Add a peer's camera
+// reading a QR code, and what it last read (the form's filled as the
+// count goes up); your followers; where you listen.
+export struct YouShown {
+    name: string,
+    says: string,
+    pictured: bool,
+    avatar-taking: bool,
+    key: string,
+    contact: string,
+    scanning: bool,
+    scanned-count: int,
+    scanned-name: string,
+    scanned-address: string,
+    scanned-key: string,
+    followers-text: string,
+    listening-text: string,
+    manual: string,
+    discoverable: bool,
+}
+
+// Someone saying they're on this network (swarm_app's discovery.rs), in
+// Add a contact and Follow someone: their name, the start of their key,
+// their addresses here, their code (picked: put in the form), and
+// whether they're already a contact (greyed, at the end).
+export struct NearbyRow { name: string, key: string, addresses: string, code: string, known: bool }
+
+export global App {
+    // Who you are, your picture and its QR code; the top line.
+    in property <YouShown> me;
+    in property <image> my-avatar;
+    in property <image> my-qr;
+    // A QR code shown over everything, as big as fits (tapped to open,
+    // tapped again or Esc to close): 0 none, 1 yours, 2 the contact
+    // shown's, 3 the code for adding a device.
+    in-out property <int> qr-big;
+    in property <TopLine> top;
+    // Each of App.rows' pictures, in the same place.
+    in property <[Pictured]> row-pictures;
+    // The call.
+    in property <CallShown> call;
+    // Everyone who can be added to the call now.
+    in property <[string]> addable;
+    // Whom what's typed in a picker (Picker) matches, at most five.
+    in property <[string]> picks;
+    // Someone being picked: to add to the call (1), to add to the group
+    // open (2), to start a group with the contact open (3), by what's
+    // typed so far; 0, no longer.
+    callback pick(int, string);
+    // A contact's chat, by their name.
+    callback open-chat(string);
+    // A web address in a chat line clicked: opened in the browser.
+    callback open-link(string);
+    // A line of a contact's chat deleted: its ChatLine's refs.
+    callback delete-line(string);
+    // App.lines from the first to the last given (either way round), as
+    // they're copied: the day's heading, then each with its time and who.
+    callback chat-text(int, int) -> string;
+    // The day's heading line `i` of App.lines is under (-1: none).
+    pure callback chat-day-of(int) -> int;
+    // The text selected in App.lines: from the first line's byte offset
+    // to the last's, the messages alone, one to a line.
+    callback chat-selection(int, int, int, int) -> string;
+    // The chat line's text under a point in the window: where in it, as
+    // a point, the word there, or the whole of it (unit 1-3); -1s, none.
+    callback text-span-at(length, length, int) -> TextSpan;
+    // One of the user's posts deleted: its PostItem's refs.
+    callback delete-post(string);
+    in property <string> fatal;
+    // This device was taken off your devices, and wiped (App.fatal says so).
+    in property <bool> wiped;
+    // The key hints along the bottom (desktop/src/keys.rs).
+    in property <[Hint]> hints;
+    // What a key pressed does now (desktop/src/keys.rs), and that what
+    // decides it has changed in the window (the hints are made again).
+    pure callback command-for(string) -> KeyCommand;
+    // A code pasted into Add a contact or Edit (the text; the key of the
+    // contact edited, "" adding), read.
+    pure callback read-code(string, string) -> CodeRead;
+    // Tab in the typing box: the text with the name at its end completed
+    // to one in this chat, "" if none fits (see `chat::complete`).
+    callback complete-name(string) -> string;
+    callback keys-changed();
+    in-out property <bool> video-only;
+    // 0 follow the system, 1 light, 2 dark.
+    in property <int> theme;
+
+    // Your recovery words, just made.
+    in property <[string]> recovery-words;
+    // The same, on one line, for the clipboard.
+    in property <string> recovery-line;
+    // Why what was typed on the first-run or unlock screen wasn't taken.
+    in property <string> first-run-error;
+    // Adding this device to your user: asking the other device.
+    in property <bool> first-run-busy;
+    // The first run's camera, reading another device's code; the code,
+    // typed, pasted or read.
+    in property <bool> first-run-scanning;
+    in-out property <string> first-run-code;
+    // A passphrase offered: put in both fields when it comes.
+    in property <string> suggested;
+    // What's showing.
+    in property <Pane> view;
+    // The list narrowed to pictures, and the width it's been dragged
+    // to (0, by the window's).
+    in property <bool> list-narrow;
+    in property <length> list-width;
+    // A group's members folded away, and the width they were dragged
+    // to (0, the usual).
+    in property <bool> members-hidden;
+    in property <length> members-width;
+    in property <[Row]> rows;
+
+    // A peer: who, their picture, and their posts.
+    in property <PeerShown> peer;
+    in property <image> peer-avatar;
+    in property <[PostItem]> public-posts;
+    in property <[PostItem]> private-posts;
+    // The chat open, a peer's or a group's.
+    in property <[ChatLine]> lines;
+    in property <ChatShown> chat;
+
+    // A group.
+    in property <ChannelShown> channel;
+    in property <[Member]> members;
+    in property <[CallMember]> call-members;
+
+    // Your posts, and your addresses.
+    in property <[PostItem]> my-public;
+    in property <[PostItem]> my-private;
+    in property <[string]> global-addresses;
+    in property <[string]> local-addresses;
+    // They see you at: where contacts have seen your connections come
+    // from that isn't one of your own addresses (label the IP, value who).
+    in property <[Detail]> seen-at;
+
+    // A request.
+    in property <RequestDetails> req;
+
+    // Peers view: the selected peer; its picture, QR code and addresses.
+    in property <PeerDetails> pd;
+    in property <image> pd-avatar;
+    in property <image> pd-qr;
+    in property <[Detail]> pd-places;
+    // Settings: everyone removed or blocked (name, which).
+    // Blocked keys, under You: the name each last gave (label) and key.
+    in property <[Detail]> blocked;
+    // Who's on this network, while Add a contact or Follow someone is
+    // open (asked for with browse); and whether a few seconds have gone
+    // by since asking, so nobody's there.
+    in property <[NearbyRow]> nearby;
+    in property <bool> nearby-looked;
+    // One of your devices, chosen under You; a code for adding one,
+    // while it's shown ("" not), and it as a QR code.
+    in property <DeviceDetails> dd;
+    in property <string> device-code;
+    in property <image> device-qr;
+
+    // A group's details.
+    in property <ChannelDetails> cd;
+    in property <string> detected-address;
+
+    // Transfers: with the peer selected ("": everyone's).
+    in property <[TransferItem]> transfers;
+    in property <string> transfers-with;
+    // How many of those listed are finished (Clear all shows if any).
+    in property <int> transfers-finished;
+
+    // Settings.
+    in property <SettingsShown> settings;
+    // The microphones and speakers to choose from (the system's own
+    // first).
+    in property <[string]> microphones;
+    in property <[string]> speakers;
+    // The cameras to choose from.
+    in property <[string]> cameras;
+    // In a call, the same by short names (Selfie, Back), for the phone's
+    // Camera to offer; App.settings.camera-index is the one chosen.
+    in property <[string]> call-cameras;
+
+    // Things asking for an answer.
+    in property <Asking> ask;
+
+    in property <image> remote-frame;
+    in property <image> local-frame;
+    // Theirs, shown large while their picture isn't.
+    in property <image> remote-avatar;
+    // In a call of three or more, everyone not shown large, and us.
+    in property <[StripTile]> strip;
+    // Each in the strip's voice's level, 0 to 1, as App.strip has them.
+    in property <[float]> strip-levels;
+    // Each in App.call-members' too, and ours.
+    in property <[float]> member-levels;
+    in property <float> own-level;
+    // Settings' microphone meter: its level, or why there's none.
+    in property <float> mic-level;
+    in property <string> mic-note;
+    // How a call's going, a row each (Settings, Call details).
+    in property <[Detail]> call-details;
+    in property <bool> preview-shown;
+    in property <image> preview-frame;
+    in property <string> preview-info;
+
+    // What the person does.
+    callback select(int);
+    callback move(int);
+    callback escape();
+    callback new-post();
+    callback text-size(int);
+    callback show-view(Pane);
+    callback narrow-list(bool);
+    callback set-list-width(length);
+    callback hide-members(bool);
+    callback set-members-width(length);
+    callback set-tab(int);
+    callback send(string);
+    callback post(string, bool);
+    callback refresh();
+    // A call to the peer open, or the device of yours chosen (true: with
+    // video); in one, a peer's added to it.
+    callback place-call(bool);
+    // Adds the peer with this name to the call.
+    callback add-named(string);
+    callback hang-up();
+    callback remove-from-call(int);
+    callback toggle-camera();
+    // In a call: this camera of App.call-cameras, on (Settings' choice
+    // too, from now on).
+    callback use-camera(int);
+    callback toggle-screen();
+    // Ask to control the screen shown large, or give it back.
+    callback toggle-control();
+    // Whoever's asking to control ours: allowed, or refused.
+    callback answer-control(bool);
+    // Whoever's controlling ours: stopped.
+    callback stop-control();
+    // What's done over their picture, while we control their screen: the
+    // pointer at a point of it (0 to 1 across and down), a button pressed
+    // or let go (0 left, 1 middle, 2 right, 3 back, 4 forward), the wheel
+    // turned (in pixels, as the window gives it), a key pressed or let go.
+    callback control-pointer(float, float);
+    callback control-button(int, bool);
+    callback control-wheel(length, length);
+    callback control-key(string, bool);
+    callback toggle-mute();
+    callback preview(bool);
+    callback answer(bool);
+    callback reject-call();
+    callback offer(Answer);
+    callback confirm(bool);
+    // Deleting a contact, and blocking them too.
+    callback confirm-block();
+    callback send-file();
+    callback next-timer();
+    // The selected peer's timer, as Answering.timers' index.
+    callback set-timer(int);
+    callback add-peer(string, string, string, string);
+    callback update-peer(string, string, string, string);
+    callback remove-peer();
+    callback follow(string, string);
+    callback unfollow();
+    callback set-receive(string, string);
+    callback cycle-answer();
+    // How the selected peer's (or device's) calls are answered, as
+    // Answering.choices' index.
+    callback set-answer(int);
+    // The contact or device chosen may control your shared screen
+    // without asking, or not.
+    callback set-control(bool);
+    callback request(RequestAnswer);
+    callback add-request(string);
+    // A new group, with nobody else in it yet.
+    callback new-group();
+    // A group of the contact whose chat is open and this one.
+    callback group-with(string);
+    // The group open renamed ("": back to its members' names).
+    callback rename-group(string);
+    callback transfer(int, TransferAnswer);
+    callback clear-transfers();
+    callback set-name(string);
+    callback sound(SoundStep);
+    callback ringtone(SoundStep);
+    // Your status ("" for none).
+    callback set-says(string);
+    callback set-manual-address(string);
+    callback set-discoverable(bool);
+    // Looking for who's on this network: while Add a contact or Follow
+    // someone is open.
+    callback browse(bool);
+    callback avatar(AvatarStep);
+    // Add a peer's camera, for a QR code: on, off.
+    callback scan(bool);
+    callback scan-device();
+    callback set-setting(Setting, int);
+    callback first-run(string, string, string);
+    callback restore-identity(string, string, string, string);
+    callback unlock(string);
+    callback reset-passphrase(string, string, string);
+    callback suggest-passphrase();
+    callback words-written();
+    callback device-rename(string);
+    callback show-device-code(bool);
+    callback device-remove();
+    callback device-relay(bool);
+    callback device-receive-only(bool);
+    callback device-bandwidth-limit(string);
+    callback device-receive-limit(string);
+    callback device-address(string);
+    callback contact-address(string);
+    callback join-user(string, string, string, string);
+    callback unblock(int);
+    callback quit();
+    // A key pressed anywhere in the window, a box being typed in too: it's
+    // in use (for locking when left).
+    callback used();
+    // The phone's window: a chat open over the list, or the list showing.
+    callback chat-shown(bool);
+
+    // The manual (Help), the window's own (desktop/src/help.rs): its
+    // contents as listed now, the page open (its title, which section
+    // it is, those before and after it), and a count that goes up as
+    // another opens (it's shown from its top).
+    in property <[HelpRow]> help-rows;
+    // "Version" and when this build was made, over the contents too: on a
+    // phone they're shown alone first, the page with it a tap away.
+    in property <string> help-version;
+    in property <[HelpBlock]> help-page;
+    in property <string> help-title;
+    in property <int> help-at;
+    in property <string> help-before;
+    in property <string> help-after;
+    in property <int> help-token;
+    // A page opened from the contents (its section), a link in one (the
+    // section's number), or the one before (-1) or after (1).
+    callback help-open(int);
+    callback help-link(string);
+    callback help-step(int);
+}
+
+// The first run: one question, a new user or this device added to
+// yours; then a passphrase chosen (or one suggested) and, for a new
+// user, a name; for this device, a code from another of yours, or the
+// 12 words.
+export component FirstRunCard inherits VerticalLayout {
+    in-out property <string> new-name;
+    in-out property <string> pass;
+    in-out property <string> pass-again;
+    in-out property <string> restore-words;
+    in property <string> suggested;
+    // 0 the question, 1 a new user, 2 this device added.
+    in-out property <int> step;
+    if step == 0: Panel {
+        title: "Welcome to Swarm";
+        VerticalLayout {
+            spacing: 10px; alignment: start;
+            Text { text: "Is this your first device with Swarm, or are you already on Swarm on another?"; wrap: word-wrap; }
+            HorizontalLayout {
+                alignment: start; spacing: 8px;
+                Button { text: "New user"; primary: true; clicked => { step = 1; } }
+                Button { text: "Add this device to my user"; clicked => { step = 2; } }
+            }
+            Text { text: "A new user is someone new: people add you by it. Adding this device makes it one of yours, with your name, contacts and chats, kept in step with your others."; wrap: word-wrap; color: Dim.text; }
+        }
+    }
+    if step != 0: Panel {
+        title: step == 1 ? "New user" : "Add this device to my user";
+        VerticalLayout {
+            spacing: 10px; alignment: start;
+            if step == 2: Text { text: "On another of your devices, in Contacts choose Add a device, at the end of DEVICES under You. Scan its code with this device's camera, or paste the line under it here."; wrap: word-wrap; color: Dim.text; }
+            if step == 2 && !App.first-run-scanning: HorizontalLayout {
+                spacing: 8px;
+                LineEdit { text <=> App.first-run-code; input-method-hints: Typing.exact; placeholder-text: "swarm-device:…"; horizontal-stretch: 1; init => { self.focus(); } }
+                Button { text: "Scan a QR code"; enabled: !App.first-run-busy; clicked => { App.scan(true); } }
+            }
+            if step == 2 && App.first-run-scanning: Rectangle {
+                height: self.width * 9 / 16;
+                background: #202020;
+                Image { source: App.preview-frame; image-fit: contain; width: parent.width; height: parent.height; }
+            }
+            if step == 2 && App.first-run-scanning: HorizontalLayout {
+                spacing: 8px;
+                Text { text: "Hold your other device's code up to the camera."; color: Dim.text; vertical-alignment: center; horizontal-stretch: 1; wrap: word-wrap; }
+                Button { text: "Stop"; clicked => { App.scan(false); } }
+            }
+            if step == 1: Labelled { label: "Your name (optional)"; text <=> new-name; }
+            if step == 2: Labelled { label: "This device's name (optional)"; text <=> new-name; }
+            Text { text: "Choose a passphrase. You'll type it each time Swarm starts, and everything Swarm keeps on this device is locked with it. Four or five random words, or a sentence of your own, will do."; wrap: word-wrap; color: Dim.text; }
+            Text { text: "Passphrase"; color: Dim.text; font-size: 12px; }
+            LineEdit { text <=> pass; input-type: password; init => { if (step == 1) { self.focus(); } } }
+            Text { text: "The same again"; color: Dim.text; font-size: 12px; }
+            LineEdit {
+                text <=> pass-again; input-type: password;
+                accepted => {
+                    if (step == 1) { App.first-run(new-name, pass, pass-again); }
+                    else if (App.first-run-code != "" && !App.first-run-busy) { App.join-user(App.first-run-code, new-name, pass, pass-again); }
+                }
+            }
+            if suggested != "": Text { text: "Suggested: " + suggested + " (put in both fields: write it down somewhere, or choose your own)"; wrap: word-wrap; }
+            if App.first-run-busy: Text { text: "Asking your other device…"; wrap: word-wrap; color: Dim.text; }
+            if App.first-run-error != "": Text { text: App.first-run-error; wrap: word-wrap; color: Roles.status(NoteKind.error); }
+            HorizontalLayout {
+                alignment: start; spacing: 8px;
+                if step == 1: Button { text: "Create identity"; primary: true; enabled: pass != ""; clicked => { App.first-run(new-name, pass, pass-again); } }
+                if step == 2: Button { text: "Add this device"; primary: true; enabled: App.first-run-code != "" && pass != "" && !App.first-run-busy; clicked => { App.join-user(App.first-run-code, new-name, pass, pass-again); } }
+                Button { text: "Suggest a passphrase"; clicked => { App.suggest-passphrase(); } }
+                Button { text: "Back"; enabled: !App.first-run-busy; clicked => { if (App.first-run-scanning) { App.scan(false); } step = 0; } }
+            }
+            if step == 2: Rectangle { height: 6px; }
+            if step == 2: Text { text: "Or, with no other device to hand, type your 12 recovery words (the first four letters of each are enough), with the passphrase above:"; wrap: word-wrap; color: Dim.text; }
+            if step == 2: LineEdit { text <=> restore-words; input-method-hints: Typing.exact; placeholder-text: "12 words"; }
+            if step == 2: HorizontalLayout { alignment: start; Button { text: "Bring it back"; enabled: restore-words != "" && pass != "" && !App.first-run-busy; clicked => { App.restore-identity(restore-words, new-name, pass, pass-again); } } }
+        }
+    }
+}
+
+// Locked after being left (see the setting): the passphrase again.
+export component LockedCard inherits VerticalLayout {
+    in-out property <string> pass;
+    Panel {
+        title: "Swarm is locked";
+        VerticalLayout {
+            spacing: 10px; alignment: start;
+            Text { text: "Passphrase"; color: Dim.text; font-size: 12px; }
+            LineEdit { text <=> pass; input-type: password; accepted => { App.unlock(pass); pass = ""; } init => { self.focus(); } }
+            if App.first-run-error != "": Text { text: App.first-run-error; wrap: word-wrap; color: Roles.status(NoteKind.error); }
+            HorizontalLayout { alignment: start; Button { text: "Unlock"; primary: true; enabled: pass != ""; clicked => { App.unlock(pass); pass = ""; } } }
+        }
+    }
+}
+
+// swarm starting: its passphrase, or a new one from the 12 words.
+export component UnlockCard inherits VerticalLayout {
+    in-out property <string> pass;
+    in-out property <string> pass-again;
+    in-out property <string> pass-new-again;
+    in-out property <string> restore-words;
+    Panel {
+        title: "Unlock Swarm";
+        VerticalLayout {
+            spacing: 10px; alignment: start;
+            Text { text: "Passphrase"; color: Dim.text; font-size: 12px; }
+            LineEdit { text <=> pass; input-type: password; accepted => { App.unlock(pass); } init => { self.focus(); } }
+            if App.first-run-error != "": Text { text: App.first-run-error; wrap: word-wrap; color: Roles.status(NoteKind.error); }
+            HorizontalLayout { alignment: start; Button { text: "Unlock"; primary: true; enabled: pass != ""; clicked => { App.unlock(pass); } } }
+            Rectangle { height: 6px; }
+            Text { text: "Forgotten it? Type your 12 recovery words and choose a new passphrase:"; wrap: word-wrap; color: Dim.text; }
+            LineEdit { text <=> restore-words; input-method-hints: Typing.exact; placeholder-text: "12 words"; }
+            Text { text: "New passphrase"; color: Dim.text; font-size: 12px; }
+            LineEdit { text <=> pass-again; input-type: password; }
+            Text { text: "The same again"; color: Dim.text; font-size: 12px; }
+            LineEdit { text <=> pass-new-again; input-type: password; }
+            HorizontalLayout {
+                alignment: start; spacing: 8px;
+                Button { text: "Set the new passphrase"; enabled: restore-words != "" && pass-again != ""; clicked => { App.reset-passphrase(restore-words, pass-again, pass-new-again); } }
+            }
+        }
+    }
+}
+
+// The 12 recovery words, just made: written down before going on.
+export component WordsCard inherits VerticalLayout {
+    property <bool> words-copied;
+    Panel {
+        title: "Your recovery words";
+        VerticalLayout {
+            spacing: 10px; alignment: start;
+            GridLayout {
+                spacing-horizontal: 24px; spacing-vertical: 6px;
+                for w[i] in App.recovery-words: Text {
+                    row: i / 3; col: Math.mod(i, 3);
+                    text: (i + 1) + ". " + w; font-size: 16px; font-family: "monospace";
+                }
+            }
+            Text { text: "Write these 12 words down and keep them somewhere safe and private. They're the only way to get your identity back if this device is lost, and anyone who has them can be you."; wrap: word-wrap; }
+            Text { text: "Copying them saves typing, but anything else on this device can read the clipboard, and some clipboard managers keep it for good: paste them somewhere safe, then copy something else over them."; wrap: word-wrap; color: Dim.text; }
+            Rectangle { height: 0px; words-copy := TextInput { text: App.recovery-line; read-only: true; visible: false; } }
+            HorizontalLayout {
+                alignment: start; spacing: 8px;
+                Button { text: words-copied ? "Copied" : "Copy the words"; clicked => { words-copy.select-all(); words-copy.copy(); words-copied = true; } }
+                Button { text: "I've written them down"; primary: true; clicked => { App.words-written(); } }
+            }
+        }
+    }
+}
+
+// Settings, in sections, scrolling when they're taller than the window;
+// each one's help by its name.
+// Your name, status and picture, and what changes them: under You, in
+// Contacts.
+export component YouEditor inherits VerticalLayout {
+    property <string> new-name;
+    property <string> new-says;
+    property <string> new-manual;
+    // Something set: the keys back to the window.
+    callback done();
+    spacing: 10px; max-width: 720px;
+    SettingRow {
+        label: "Your name"; help: "Shown to others beside your key.";
+        LineEdit { text <=> new-name; input-method-hints: Typing.name; placeholder-text: App.me.name; horizontal-stretch: 1; accepted => { if (new-name != "") { App.set-name(new-name); new-name = ""; root.done(); } } }
+        Button { text: "Set"; enabled: new-name != ""; clicked => { App.set-name(new-name); new-name = ""; root.done(); } }
+    }
+    SettingRow {
+        label: "Your status"; help: "A few words beside your name — where you are, whether you're free. Only your contacts see it.";
+        says-edit := LineEdit { text <=> new-says; input-method-hints: Typing.words; placeholder-text: App.me.says != "" ? App.me.says : "none"; horizontal-stretch: 1; accepted => { if (new-says != "") { App.set-says(new-says); new-says = ""; root.done(); } } }
+        Button { text: "Set"; enabled: new-says != ""; clicked => { App.set-says(new-says); new-says = ""; root.done(); } }
+        if App.me.says != "": Button { text: "Clear"; clicked => { App.set-says(""); root.done(); } }
+    }
+    SettingRow {
+        label: "Your picture"; help: "Beside your name, and in a call while your camera's off. Only your contacts see it. Its middle square is kept, small.";
+        if App.me.avatar-taking: Rectangle {
+            width: 96px; height: 96px; border-radius: 48px; clip: true; background: #202020;
+            Image { source: App.preview-frame; image-fit: cover; width: parent.width; height: parent.height; }
+        }
+            VerticalLayout {
+            alignment: center; horizontal-stretch: 1;
+            HorizontalLayout {
+                spacing: 8px; alignment: start;
+                if !App.me.avatar-taking: Button { text: "From a file…"; clicked => { App.avatar(AvatarStep.from-file); root.done(); } }
+                if !App.me.avatar-taking: Button { text: "Take one"; enabled: !App.call.video-shown; clicked => { App.avatar(AvatarStep.open-camera); } }
+                if !App.me.avatar-taking && App.me.pictured: Button { text: "Remove"; clicked => { App.avatar(AvatarStep.remove); root.done(); } }
+                if App.me.avatar-taking: Button { text: "Take it"; primary: true; clicked => { App.avatar(AvatarStep.take); root.done(); } }
+                if App.me.avatar-taking: Button { text: "Cancel"; clicked => { App.avatar(AvatarStep.cancel); root.done(); } }
+            }
+        }
+    }
+    SettingRow {
+        label: "Manually set IP address"; help: "Where you can be reached that this device can't see for itself: your router's public address with a port forwarded to one of your devices, say, or a host name for it. Several are separated by commas; add :port if it isn't 1977. It's first in your code wherever you show it, on all your devices, so anyone who scans your code sees it.";
+        LineEdit { text <=> new-manual; input-method-hints: Typing.exact; placeholder-text: App.me.manual != "" ? App.me.manual : "none"; horizontal-stretch: 1; accepted => { if (new-manual != "") { App.set-manual-address(new-manual); new-manual = ""; root.done(); } } }
+        Button { text: "Set"; enabled: new-manual != ""; clicked => { App.set-manual-address(new-manual); new-manual = ""; root.done(); } }
+        if App.me.manual != "": Button { text: "Clear"; clicked => { App.set-manual-address(""); root.done(); } }
+    }
+    SettingRow {
+        label: "Discoverable on this network"; help: "Anyone on the same network (at home, at work) sees your name, key and address here, told by each of your devices on it (mDNS), in their Add a contact, and can ask to add you; you still choose whether to accept. Set on one of your devices, it's on all of them.";
+        CheckBox { text: "on"; checked: App.me.discoverable; toggled => { App.set-discoverable(self.checked); root.done(); } }
+    }
+    if App.seen-at.length > 0: SettingRow {
+        label: "They see you at"; help: "Where your contacts see your connections come from, when it isn't one of this device's own addresses: behind a router, its public address. Use this puts it in the field above, for you to check (and add :port to) before Set.";
+        VerticalLayout {
+            spacing: 4px; horizontal-stretch: 1;
+            for s in App.seen-at: HorizontalLayout {
+                spacing: 8px;
+                TextInput { text: s.label; read-only: true; color: Palette.foreground; vertical-alignment: center; }
+                Text { text: "(" + s.value + ")"; color: Dim.text; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                Button { text: "Use this"; clicked => { new-manual = s.label; } }
+            }
+        }
+    }
+}
+
+// Where a contact or another of your devices is to be found, typed: the
+// same in both. The field starts out holding what's set, to change; Set
+// keeps it in its place and tries it at once. An IP, or a host name looked
+// up at each try (a dynamic-DNS name, say), with :port if it isn't 1977;
+// several separated by commas. `clearable`: emptied, Set clears it.
+export component AddressSetter inherits HorizontalLayout {
+    in property <string> current;
+    in property <string> help;
+    in property <bool> clearable;
+    property <string> typed: root.current;
+    callback set(string);
+    changed current => { root.typed = root.current; }
+    spacing: 6px;
+    LineEdit {
+        text <=> root.typed; input-method-hints: Typing.exact; placeholder-text: "IP address or host name"; horizontal-stretch: 1;
+        accepted => { if (root.typed != root.current && (root.typed != "" || root.clearable)) { root.set(root.typed); } }
+    }
+    Button { text: "Set address"; enabled: root.typed != root.current && (root.typed != "" || root.clearable); clicked => { root.set(root.typed); } }
+    HelpLabel { label: ""; help: root.help; }
+}
+
+// One of this device's limits (bandwidth, receive): the field holds
+// what's set, to change; Set limit keeps it, and emptied, takes it away.
+component LimitSetter inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> help;
+    in property <string> current;
+    property <string> typed: root.current;
+    callback set(string);
+    changed current => { root.typed = root.current; }
+    spacing: 6px;
+    Text { text: root.label; vertical-alignment: center; }
+    LineEdit {
+        text <=> root.typed; input-method-hints: Typing.exact; placeholder-text: "none (e.g. 2m)"; horizontal-stretch: 1;
+        accepted => { if (root.typed != root.current) { root.set(root.typed); } }
+    }
+    Button { text: "Set limit"; enabled: root.typed != root.current; clicked => { root.set(root.typed); } }
+    HelpLabel { label: ""; help: root.help; }
+}
+
+// One of your devices, chosen under You (App.dd): what's known of it,
+// and what can be done with it. Contacts never see it.
+export component DevicePanel inherits VerticalLayout {
+    in property <length> label-width: 100px;
+    property <string> new-name;
+    property <string> new-address;
+    // Something done: the keys back to the window.
+    callback done();
+    spacing: 8px; alignment: start;
+    Text { text: App.dd.name; font-weight: 700; }
+    FieldLine { label: "status"; value: App.dd.status; label-width: root.label-width; }
+    if App.dd.in-use != "": FieldLine { label: "in use"; value: App.dd.in-use; label-width: root.label-width; }
+    FieldLine { label: "added"; value: App.dd.added; label-width: root.label-width; }
+    if !App.dd.this: FieldLine { label: "address"; value: App.dd.typed != "" ? App.dd.typed : "none"; label-width: root.label-width; }
+    if App.dd.address != "": FieldLine { label: "last at"; value: App.dd.address; label-width: root.label-width; }
+    FieldLine { label: "key"; value: App.dd.key; label-width: root.label-width; }
+    if !App.dd.this: ChoiceLine { label: "its calls"; model: Answering.choices; current: App.dd.answer-index; label-width: root.label-width; chosen(i) => { App.set-answer(i); root.done(); } }
+    if !App.dd.this && !Look.phone: HorizontalLayout {
+        spacing: 8px; alignment: start;
+        CheckBox { text: "May control your screen without asking"; checked: App.dd.control; toggled => { App.set-control(self.checked); root.done(); } }
+        HelpLabel { label: ""; help: "Lets them see and use your screen as soon as they ask in a call: it's shared with them if it isn't already, with no Allow to press, so nobody need be at this end. For someone you trust to help when you can't see the screen. Take back control, or moving your own mouse, still works as ever."; }
+    }
+    if App.dd.linked: HorizontalLayout {
+        spacing: 8px; alignment: start;
+        CheckBox { text: "Relays for your other devices"; checked: App.dd.relay; toggled => { App.device-relay(self.checked); root.done(); } }
+        HelpLabel { label: ""; help: "Passes connections on between your other devices and contacts who can't reach each other directly. It can't read what it passes on."; }
+    }
+    if App.dd.this: HorizontalLayout {
+        spacing: 8px; alignment: start;
+        CheckBox { text: "Receive connections only"; checked: App.dd.receive-only; toggled => { App.device-receive-only(self.checked); root.done(); } }
+        HelpLabel { label: ""; help: "With its screen off, this device dials no one: your other devices and contacts connect to it, and it waits for them. With the screen on, or in a call, it dials as usual, so a contact behind a port forward is found directly. It saves a phone's battery when another of your devices can always reach it (over a VPN home, say). A computer, which has no screen to say so, never dials."; }
+    }
+    if App.dd.this: LimitSetter {
+        label: "Bandwidth limit"; current: App.dd.bandwidth-limit;
+        help: "The most this device sends, all told, in bits a second: 2m is 2 Mbit/s, 500k is 500 kbit/s. It's a ceiling, not a rate: below it everything goes as it would, and nothing goes faster — calls, files, cover, and the connections' own traffic alike. Cover rates, yours and any a contact requires, are held under it, and call video fits itself in. Emptied, Set limit takes it away. For this device only: a phone on mobile data and a computer at home can each have their own.";
+        set(text) => { App.device-bandwidth-limit(text); }
+    }
+    if App.dd.this: LimitSetter {
+        label: "Receive limit"; current: App.dd.receive-limit;
+        help: "The most this device wants sent to it, in bits a second, such as 1m: every contact is asked to keep what they send under it. Their call video comes down to it within a second or two, even in a call; files are asked for no faster; cover they send you is held under it from their next connection (a call's carried on as it is). A request, honoured by Swarm: nothing at this end can stop a sender. Emptied, Set limit takes it away. For this device only.";
+        set(text) => { App.device-receive-limit(text); }
+    }
+    if App.dd.this: HorizontalLayout {
+        spacing: 6px;
+        LineEdit { text <=> root.new-name; input-method-hints: Typing.name; placeholder-text: App.dd.name; horizontal-stretch: 1; accepted => { if (root.new-name != "") { App.device-rename(root.new-name); root.new-name = ""; root.done(); } } }
+        Button { text: "Rename"; enabled: root.new-name != ""; clicked => { App.device-rename(root.new-name); root.new-name = ""; root.done(); } }
+    }
+    if !App.dd.this: AddressSetter {
+        current: App.dd.typed; clearable: true;
+        help: "For when this device can't have heard where that one is now (both moved to a new network, say), or a host name for it, looked up at each try, so it's still found when the IP behind the name changes. An IP address or host name, with :port if it isn't 1977; several are separated by commas. Or paste that device's code, from under You on it. Tried at once, and with where it's been whenever it isn't connected; emptied, Set address clears it.";
+        set(text) => { App.device-address(text); root.done(); }
+    }
+    if !App.dd.this: CodeScanner { device: true; }
+    if !App.dd.this: HorizontalLayout {
+        spacing: 6px;
+        WhyButton { text: "Call"; why: App.call.call-why; clicked => { App.place-call(false); root.done(); } }
+        WhyButton { text: "Video call"; why: App.call.video-why; clicked => { App.place-call(true); root.done(); } }
+        Rectangle { horizontal-stretch: 1; }
+        Button { text: "Remove…"; clicked => { App.device-remove(); root.done(); } }
+    }
+    Text { text: "Each of your devices has your name, contacts and chats, kept in step. Contacts see your name, never a device's."; color: Dim.text; wrap: word-wrap; }
+}
+
+// Adding a device (Add a device, under DEVICES): the code for the new one to
+// read, while it's shown, under You.
+export component DeviceCodeCard inherits VerticalLayout {
+    in property <length> side: 200px;
+    callback done();
+    spacing: 6px; alignment: start;
+    Text { text: "Add a device"; font-weight: 700; }
+    Text { text: "On the new device, start Swarm and choose Add this device to my user, and paste the line under this code. It works once, for ten minutes, while Swarm runs here."; wrap: word-wrap; }
+    HorizontalLayout {
+        alignment: start;
+        Image {
+            source: App.device-qr; image-rendering: pixelated; width: root.side; height: root.side;
+            TouchArea { mouse-cursor: pointer; clicked => { App.qr-big = 3; } }
+        }
+    }
+    TextInput { text: App.device-code; read-only: true; color: Palette.foreground; wrap: char-wrap; font-size: 11px; }
+    Text { text: "Anyone with the code can add a device as you: show it to nobody else."; color: Dim.text; font-size: 11px; wrap: word-wrap; }
+    HorizontalLayout { alignment: start; Button { text: "Done"; clicked => { App.show-device-code(false); root.done(); } } }
+}
+
+export component SettingsPage inherits VerticalLayout {
+    // How far it's scrolled down (for the tests).
+    out property <length> scrolled;
+    // Something set: the keys back to the window.
+    callback done();
+    Page {
+        vertical-stretch: 1;
+        column: 860px; centred: false;
+        changed content-y => { Tip.text = ""; root.scrolled = -self.content-y; }
+        property <bool> previewing: App.preview-shown && !App.me.avatar-taking;
+        property <bool> brought;
+        changed previewing => { self.brought = false; self.bring-preview(); }
+        changed content-height => { self.bring-preview(); }
+        function bring-preview() {
+            if (self.previewing && !self.brought && self.content-height > self.visible-height) {
+                self.content-y = max(self.visible-height - self.content-height, -video-panel.y);
+                self.brought = true;
+            }
+        }
+        Panel {
+            title: "General";
+            VerticalLayout {
+                spacing: 10px;
+                SettingRow {
+                    label: "Colours"; help: "Light or dark, or as the system has it. The terminal UI goes by it too.";
+                    ComboBox { horizontal-stretch: 1; model: ["system", "light", "dark"]; current-index: App.theme; selected => { App.set-setting(Setting.theme, self.current-index); } }
+                }
+                SettingRow {
+                    label: "Text size"; help: "Ctrl + and Ctrl − change it too, and Ctrl 0 puts it back to 100%.";
+                    ComboBox { horizontal-stretch: 1; model: ["90%", "100%", "115%", "130%", "150%", "175%", "200%"]; current-index: App.settings.text-size; selected => { App.set-setting(Setting.text-size, self.current-index); } }
+                }
+                SettingRow {
+                    label: "Lock when left"; help: "Asks for your passphrase again once Swarm's been left alone this long. It runs on meanwhile.";
+                    ComboBox { horizontal-stretch: 1; model: ["never", "after 5 minutes", "after 15 minutes", "after 30 minutes", "after an hour"]; current-index: App.settings.lock-index; selected => { App.set-setting(Setting.lock-after, self.current-index); } }
+                }
+                SettingRow {
+                    label: "Ringtone"; help: "What a call rings with, over and over until it's answered or rings out: your own, from a sound file (WAV, Ogg, FLAC, MP3 or M4A; its first 30 seconds), or Swarm's. On a phone, at its ring volume, and not in silent mode; in vibrate mode it vibrates instead. It rings with the screen off too.";
+                    Text { text: App.settings.ringtone-name == "" ? "Swarm's own" : App.settings.ringtone-name; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                    Button { text: "Choose…"; clicked => { App.ringtone(SoundStep.choose); root.done(); } }
+                    Button { text: "Play"; clicked => { App.ringtone(SoundStep.play); root.done(); } }
+                    if App.settings.ringtone-name != "": Button { text: "Swarm's own"; clicked => { App.ringtone(SoundStep.built-in); root.done(); } }
+                }
+                SettingRow {
+                    label: "Call details"; help: "While a call's on, how long a round trip takes and what it's sending and receiving; in a video call, the pictures' size and coding, and how long each takes. Under the list on the left; on a phone, over the picture.";
+                    CheckBox { text: "shown"; checked: App.settings.call-info; toggled => { App.set-setting(Setting.call-details, self.checked ? 1 : 0); } }
+                }
+            }
+        }
+        Panel {
+            title: "Chats";
+            VerticalLayout {
+                spacing: 10px;
+                if Look.phone: SettingRow {
+                    label: "Notifications"; help: "A message coming shown in the phone's notifications: who it's from, never what it says (on the lock screen, not even that). The first from each: once, until you've read them.";
+                    ComboBox { horizontal-stretch: 1; model: ["off", "first message from each", "every message"]; current-index: App.settings.notify; selected => { App.set-setting(Setting.notify, self.current-index); } }
+                }
+                if !Look.phone: SettingRow {
+                    label: "Message sound"; help: "A sound when a message comes while Swarm's window isn't the one in use, as the phone's notifications go: the first from each until you've read them, or every one. Never during a call.";
+                    ComboBox { horizontal-stretch: 1; model: ["off", "first message from each", "every message"]; current-index: App.settings.notify; selected => { App.set-setting(Setting.notify, self.current-index); } }
+                }
+                if !Look.phone: SettingRow {
+                    label: "Sound"; help: "Your own, from a sound file (WAV, Ogg, FLAC, MP3 or M4A; its first 10 seconds), or Swarm's.";
+                    Text { text: App.settings.sound-name == "" ? "Swarm's own" : App.settings.sound-name; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                    Button { text: "Choose…"; clicked => { App.sound(SoundStep.choose); root.done(); } }
+                    Button { text: "Play"; clicked => { App.sound(SoundStep.play); root.done(); } }
+                    if App.settings.sound-name != "": Button { text: "Swarm's own"; clicked => { App.sound(SoundStep.built-in); root.done(); } }
+                }
+                SettingRow {
+                    label: "Times"; help: "The time beside each line of a chat.";
+                    CheckBox { text: "shown"; checked: App.settings.times; toggled => { App.set-setting(Setting.show-times, self.checked ? 1 : 0); } }
+                }
+                SettingRow {
+                    label: "Times shown in"; help: "Your own time, or UTC.";
+                    ComboBox { horizontal-stretch: 1; model: ["local time (" + App.settings.zone-text + ")", "UTC"]; current-index: App.settings.utc ? 1 : 0; selected => { App.set-setting(Setting.utc, self.current-index); } }
+                }
+                SettingRow {
+                    label: "People added and leaving"; help: "In a group's chat, who added whom, and who left.";
+                    CheckBox { text: "shown"; checked: App.settings.joins; toggled => { App.set-setting(Setting.show-joins, self.checked ? 1 : 0); } }
+                }
+                SettingRow {
+                    label: "Contacts listed"; help: "The order of the list on the left.";
+                    ComboBox { horizontal-stretch: 1; model: ["as added", "by name", "online first, then latest message"]; current-index: App.settings.order; selected => { App.set-setting(Setting.peer-order, self.current-index); } }
+                }
+            }
+        }
+        Panel {
+            title: "Audio"; detail: "in calls";
+            VerticalLayout {
+                spacing: 10px;
+                SettingRow {
+                    label: "Microphone"; help: "For calls, at once, even in one. The system's own follows your sound settings.";
+                    ComboBox { horizontal-stretch: 1; model: App.microphones; current-index: App.settings.microphone-index; selected => { App.set-setting(Setting.microphone, self.current-index); } }
+                }
+                SettingRow {
+                    label: "Speaker"; help: "For calls, at once, even in one. The system's own follows your sound settings.";
+                    ComboBox { horizontal-stretch: 1; model: App.speakers; current-index: App.settings.speaker-index; selected => { App.set-setting(Setting.speaker, self.current-index); } }
+                }
+                SettingRow {
+                    label: "Echo"; help: "Stops the other side hearing themselves from your speakers. With headphones it isn't needed.";
+                    CheckBox { text: "cancelled"; checked: App.settings.echo; toggled => { App.set-setting(Setting.cancel-echo, self.checked ? 1 : 0); } }
+                }
+                SettingRow {
+                    label: "Background noise"; help: "Steady noise such as a fan, made quieter.";
+                    CheckBox { text: "turned down"; checked: App.settings.noise; toggled => { App.set-setting(Setting.suppress-noise, self.checked ? 1 : 0); } }
+                }
+                SettingRow {
+                    label: "Your voice's level"; help: "A quiet or loud microphone brought to an even level.";
+                    CheckBox { text: "kept even"; checked: App.settings.level; toggled => { App.set-setting(Setting.steady-level, self.checked ? 1 : 0); } }
+                }
+                SettingRow {
+                    label: "How you're heard"; help: "How loud you're heard, as the settings above leave it. Say something to see it move.";
+                    if App.mic-note == "": LevelBar { horizontal-stretch: 1; height: 8px; border-radius: 4px; y: (parent.height - self.height) / 2; level: App.mic-level; }
+                    if App.mic-note != "": Text { text: App.mic-note; color: Dim.text; wrap: word-wrap; horizontal-stretch: 1; }
+                }
+            }
+        }
+        video-panel := Panel {
+            title: "Video";
+            VerticalLayout {
+                spacing: 10px;
+                SettingRow {
+                    label: "Camera"; help: "For calls and the preview, from the next time it's turned on. The preview shows how you'll look (w opens it).";
+                    ComboBox { horizontal-stretch: 1; model: App.cameras; current-index: App.settings.camera-index; selected => { App.set-setting(Setting.camera, self.current-index); } }
+                    Button { text: App.preview-shown ? "Close preview" : "Preview"; enabled: !App.call.video-shown; clicked => { App.preview(!App.preview-shown); root.done(); } }
+                }
+                if App.preview-shown && !App.me.avatar-taking: HorizontalLayout {
+                    padding-left: Look.phone ? 0px : 188px; spacing: 0px;
+                    VerticalLayout {
+                        spacing: 4px; horizontal-stretch: 1;
+                        Rectangle {
+                            height: self.width * 9 / 16; max-width: 640px;
+                            background: #000000; clip: true;
+                            Image { source: App.preview-frame; image-fit: contain; width: parent.width; height: parent.height; }
+                        }
+                        Text { text: App.preview-info; color: Dim.text; font-size: 12px; wrap: word-wrap; }
+                    }
+                }
+                SettingRow {
+                    label: "Video size"; help: "Automatic starts small and steps up as the link's found to carry more. A size is sent at from the start, the picture sharpening as the link allows.";
+                    ComboBox { horizontal-stretch: 1; model: ["automatic: as big as the link carries", "3840×2160 (4K)", "2560×1440", "1920×1080", "1280×720"]; current-index: App.settings.video-size; selected => { App.set-setting(Setting.video-size, self.current-index); } }
+                }
+            }
+        }
+    }
+}
+
+// Blocked keys, at the foot of You: each one's name and key, and
+// Unblock.
+// Under Add a contact and Follow someone: who's said they're on this
+// network, new ones first and contacts already, greyed, at the end. Add
+// (or Follow) puts their code in the form, which fills the rest in.
+export component NearbyList inherits VerticalLayout {
+    in property <bool> following;
+    callback picked(string);
+    spacing: 6px;
+    Text { text: "Discover locally advertised contacts"; font-weight: 700; }
+    if App.nearby.length == 0: Text {
+        text: App.nearby-looked ? "Nobody on this network is discoverable just now." : "Looking on this network…";
+        color: Dim.text; wrap: word-wrap;
+    }
+    for n in App.nearby: HorizontalLayout {
+        spacing: 8px;
+        VerticalLayout {
+            alignment: center; spacing: 1px; horizontal-stretch: 1;
+            Text { text: n.name != "" ? n.name : "(no name)"; font-weight: n.known ? 400 : 700; color: n.known ? Dim.text : Palette.foreground; overflow: elide; }
+            Text { text: (n.known ? "already a contact · " : "") + n.key + " · " + n.addresses; color: Dim.text; font-size: 11px; overflow: elide; }
+        }
+        Button { text: root.following ? "Follow" : "Add"; enabled: !n.known; clicked => { root.picked(n.code); } }
+    }
+}
+
+export component BlockedKeys inherits VerticalLayout {
+    in property <length> label-width: 90px;
+    spacing: 6px;
+    Text { text: "Blocked keys"; font-weight: 700; }
+    if App.blocked.length == 0: Text { text: "None."; color: Dim.text; }
+    if App.blocked.length > 0: Text { text: "Told they're removed whenever they connect, and never shown asking to be added. Unblocked, they can ask again."; color: Dim.text; wrap: word-wrap; }
+    for b[i] in App.blocked: VerticalLayout {
+        spacing: 2px;
+        HorizontalLayout {
+            spacing: 8px;
+            Text { text: b.label; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+            Button { text: "Unblock"; clicked => { App.unblock(i); } }
+        }
+        TextInput { text: b.value; read-only: true; color: Dim.text; wrap: char-wrap; font-size: 11px; }
+    }
+}
+
+// Files sent and received, newest first: one chosen (clicked, or Up and
+// Down), and the buttons for what can be done with each.
+export component TransferList inherits VerticalLayout {
+    in-out property <int> index;
+    callback done();
+    if App.transfers-finished > 0: HorizontalLayout {
+        alignment: end;
+        padding-bottom: 4px;
+        Button { text: "Clear all"; clicked => { App.clear-transfers(); root.done(); } }
+    }
+    if App.transfers.length == 0: Text { text: App.transfers-with != "" ? "No files sent to or received from " + App.transfers-with + " yet." : "No files sent or received yet — Send a file, on a contact, sends one."; color: Dim.text; }
+    ListView {
+        for t[i] in App.transfers: Rectangle {
+            height: 54px;
+            background: i == root.index ? Palette.selection-background : transparent;
+            border-radius: 3px;
+            TouchArea { clicked => { root.index = i; root.done(); } }
+            HorizontalLayout {
+                padding-left: 8px; padding-right: 8px; spacing: 10px;
+                Text { text: t.arrow; color: i == root.index ? Palette.selection-foreground : Dim.text; font-size: 16px; vertical-alignment: center; width: 16px; }
+                VerticalLayout {
+                    alignment: center; spacing: 3px; horizontal-stretch: 1;
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Text { text: t.name; font-weight: 700; overflow: elide; color: i == root.index ? Palette.selection-foreground : Palette.foreground; }
+                        Text { text: t.size + "  " + t.who; color: i == root.index ? Palette.selection-foreground : Dim.text; font-size: 12px; horizontal-stretch: 1; vertical-alignment: center; }
+                    }
+                    if t.kind == TransferState.moving: Rectangle {
+                        height: 4px; background: Dim.rule; border-radius: 2px;
+                        Rectangle { x: 0; width: parent.width * t.progress; background: Palette.accent-background; border-radius: 2px; }
+                    }
+                    Text { text: t.state; font-size: 12px; color: i == root.index ? Palette.selection-foreground : Dim.text; overflow: elide; }
+                }
+                if t.can-accept: Button { text: "Accept…"; clicked => { App.transfer(i, TransferAnswer.accept); } }
+                if t.can-accept: Button { text: "Decline"; clicked => { App.transfer(i, TransferAnswer.decline); root.done(); } }
+                if t.can-cancel: Button { text: "Cancel"; clicked => { App.transfer(i, TransferAnswer.cancel); root.done(); } }
+                if t.can-clear: Button { text: "Clear"; clicked => { App.transfer(i, TransferAnswer.clear); root.done(); } }
+            }
+        }
+    }
+}
+
+// What asks for an answer, over everything: a call ringing, a file
+// offered, an "are you sure?".
+export component Asks inherits Rectangle {
+    // The button chosen on a ringing call (Left/Right, then Enter).
+    in-out property <int> ring-choice;
+    // Answered: the keys back to the window.
+    callback done();
+    // A ringing call answered (0 with video, 1 voice only) or refused (2).
+    public function ring-act(k: int) {
+        if (k == 0) { App.answer(true); } else if (k == 1) { App.answer(false); } else { App.reject-call(); }
+        root.done();
+    }
+    if App.ask.ring-shown: Dialog {
+        flash: true;
+        colour: Roles.status(NoteKind.success);
+        title: "Incoming call";
+        Text { text: App.ask.ring-from + " is calling — a " + (App.ask.ring-video ? "video call" : "call"); horizontal-alignment: center; wrap: word-wrap; }
+        HorizontalLayout {
+            spacing: 8px;
+            if App.ask.ring-video: Button { text: "Video"; primary: ring-choice == 0; clicked => { root.ring-act(0); } }
+            Button { text: "Audio"; primary: ring-choice == (App.ask.ring-video ? 1 : 0); clicked => { root.ring-act(1); } }
+            Rectangle { horizontal-stretch: 1; }
+            Button { text: "Reject"; primary: ring-choice == (App.ask.ring-video ? 2 : 1); clicked => { root.ring-act(2); } }
+        }
+        Text { text: "stops ringing in " + App.ask.ring-seconds + "s"; color: Dim.text; horizontal-alignment: center; }
+    }
+    if App.call.control-asking != "" && !App.ask.ring-shown: Dialog {
+        title: "Control of your screen";
+        colour: Roles.status(NoteKind.warning);
+        Text { text: App.call.control-asking-screen ? App.call.control-asking + " asks to see and control your screen: Allow shares your screen with them, and gives them your mouse and keyboard, as if they were sitting at it." : App.call.control-asking + " asks to control your screen: your mouse and keyboard, as if they were sitting at it."; wrap: word-wrap; preferred-width: 360px; }
+        Text { text: "While they control it, Take back control, at the top of the window, ends it. Using your own mouse pauses them."; color: Dim.text; wrap: word-wrap; }
+        HorizontalLayout {
+            spacing: 6px;
+            Button { text: "Allow"; primary: true; clicked => { App.answer-control(true); root.done(); } }
+            Rectangle { horizontal-stretch: 1; }
+            Button { text: "Refuse"; clicked => { App.answer-control(false); root.done(); } }
+        }
+    }
+    if App.ask.offer-shown && !App.ask.ring-shown: Dialog {
+        title: "File from " + App.ask.offer-who;
+        colour: Roles.status(NoteKind.warning);
+        Text { text: App.ask.offer-name; font-weight: 700; wrap: word-wrap; }
+        Text { text: App.ask.offer-size; color: Dim.text; }
+        HorizontalLayout {
+            spacing: 6px;
+            Button { text: "Accept…"; primary: true; clicked => { App.offer(Answer.yes); root.done(); } }
+            Button { text: "Later"; clicked => { App.offer(Answer.later); root.done(); } }
+            Rectangle { horizontal-stretch: 1; }
+            Button { text: "Decline"; clicked => { App.offer(Answer.no); root.done(); } }
+        }
+    }
+    if App.ask.confirm-shown && !App.ask.confirm-delete: Dialog {
+        title: "Are you sure?";
+        Text { text: App.ask.confirm-question; wrap: word-wrap; }
+        HorizontalLayout {
+            spacing: 6px; alignment: end;
+            Button { text: "No"; clicked => { App.confirm(false); root.done(); } }
+            Button { text: "Yes"; primary: true; clicked => { App.confirm(true); root.done(); } }
+        }
+    }
+    if App.ask.confirm-shown && App.ask.confirm-delete: Dialog {
+        title: App.ask.confirm-request ? "Cancel contact request" : "Delete contact";
+        Text { text: App.ask.confirm-question; wrap: word-wrap; }
+        HorizontalLayout {
+            spacing: 6px; alignment: end;
+            Button { text: App.ask.confirm-request ? "Keep it" : "Cancel"; clicked => { App.confirm(false); root.done(); } }
+            Button { text: "Block"; clicked => { App.confirm-block(); root.done(); } }
+            Button { text: App.ask.confirm-request ? "Cancel request" : "Delete"; primary: true; clicked => { App.confirm(true); root.done(); } }
+        }
+    }
+}
+
+// The manual's contents, where the desktop's list is: the chapters, and
+// the sections of the one open under it.
+export component HelpList inherits ListView {
+    in property <bool> touch;
+    // Only the numbers, the list narrowed (the title on the mouse).
+    in property <bool> narrow;
+    callback chosen();
+    for r in App.help-rows: Rectangle {
+        height: touch ? (r.level == 1 ? 52px : 46px) : (r.level == 1 ? 30px : 26px);
+        background: r.selected ? Palette.selection-background : area.has-hover ? Palette.foreground.transparentize(93%) : transparent;
+        if root.narrow: Text {
+            text: r.number; font-size: 12px; font-weight: r.level == 1 ? 700 : 400;
+            color: r.selected ? Palette.selection-foreground : r.level == 1 ? Palette.foreground : Dim.text;
+        }
+        if !root.narrow: HorizontalLayout {
+            padding-left: r.level == 1 ? 10px : 22px; padding-right: 10px; spacing: 6px;
+            Text {
+                text: r.number; vertical-alignment: center; min-width: r.level == 1 ? 18px : 28px;
+                font-size: touch ? 15px : 12px;
+                color: r.selected ? Palette.selection-foreground : Dim.text;
+            }
+            Text {
+                text: r.title; vertical-alignment: center; overflow: elide; horizontal-stretch: 1;
+                font-size: touch ? (r.level == 1 ? 17px : 15px) : (r.level == 1 ? 13px : 12px);
+                font-weight: r.level == 1 ? 700 : 400;
+                color: r.selected ? Palette.selection-foreground : Palette.foreground;
+            }
+        }
+        area := TouchArea {
+            clicked => { App.help-open(r.target); root.chosen(); }
+            changed has-hover => {
+                if (root.narrow && self.has-hover) {
+                    Tip.x = root.width - 8px;
+                    Tip.below = self.absolute-position.y + self.height / 2 - 10px;
+                    Tip.above = self.absolute-position.y;
+                    Tip.text = r.title;
+                } else if (!self.has-hover && Tip.text == r.title) {
+                    Tip.text = "";
+                }
+            }
+        }
+    }
+}
+
+// A page of the manual, scrolling, its text kept to a width that reads
+// well. Pictures shrink to fit, and a click shows one full size
+// (`enlarge`). Each change of `page-token` pages once, in `page-dir`'s
+// direction, as a chat does.
+export component HelpPage inherits Rectangle {
+    in property <int> page-token;
+    in property <int> page-dir;
+    in property <length> column: 760px;
+    in property <bool> touch;
+    callback enlarge(image);
+    callback done();
+    property <int> token: App.help-token;
+    property <length> ends: foot.y + foot.height + 18px;
+    property <length> tall;
+    init => { tall = ends; }
+    changed ends => { tall = ends; }
+    changed token => { scroll.content-y = 0; }
+    changed page-token => {
+        scroll.content-y = max(min(0px, scroll.visible-height - scroll.content-height), min(0px, scroll.content-y - page-dir * (scroll.visible-height - 40px)));
+    }
+    scroll := ScrollView {
+        content-width: self.visible-width;
+        content-height: max(self.visible-height, page.preferred-height, root.tall);
+        page := VerticalLayout {
+            width: scroll.visible-width;
+            alignment: start;
+            HorizontalLayout {
+                alignment: center;
+                VerticalLayout {
+                    width: min(root.column, scroll.visible-width - 14px);
+                    padding-left: 8px; padding-right: 8px; padding-top: 14px; padding-bottom: 18px;
+                    spacing: 7px;
+                    for b in App.help-page: VerticalLayout {
+                        if b.kind == HelpKind.title: Text { text: b.plain; font-size: touch ? 24px : 22px; font-weight: 700; wrap: word-wrap; }
+                        if b.kind == HelpKind.section: VerticalLayout {
+                            padding-top: 10px;
+                            Text { text: b.plain; font-size: touch ? 19px : 17px; font-weight: 700; wrap: word-wrap; color: Palette.accent-background; }
+                        }
+                        if b.kind == HelpKind.subsection: VerticalLayout {
+                            padding-top: 6px;
+                            Text { text: b.plain; font-size: touch ? 17px : 15px; font-weight: 700; wrap: word-wrap; }
+                        }
+                        if b.kind == HelpKind.heading: VerticalLayout {
+                            padding-top: 4px;
+                            Text { text: b.plain; font-weight: 700; wrap: word-wrap; color: Dim.text; }
+                        }
+                        if b.kind == HelpKind.para || b.kind == HelpKind.links: StyledText {
+                            text: b.text; link-color: Palette.accent-background;
+                            link-clicked(link) => { App.help-link(link); root.done(); }
+                        }
+                        if b.kind == HelpKind.bullet || b.kind == HelpKind.under || b.kind == HelpKind.step: HorizontalLayout {
+                            padding-left: b.kind == HelpKind.under ? 22px : 4px; spacing: 6px;
+                            Text { text: b.kind == HelpKind.step ? b.plain + "." : b.kind == HelpKind.under ? "◦" : "•"; min-width: 14px; color: Dim.text; }
+                            StyledText {
+                                horizontal-stretch: 1;
+                                text: b.text; link-color: Palette.accent-background;
+                                link-clicked(link) => { App.help-link(link); root.done(); }
+                            }
+                        }
+                        if b.kind == HelpKind.command: Rectangle {
+                            background: Palette.alternate-background; border-radius: 3px;
+                            HorizontalLayout {
+                                padding: 6px; padding-left: 10px;
+                                Text { text: b.plain; font-family: "monospace"; wrap: word-wrap; }
+                            }
+                        }
+                        if b.kind == HelpKind.table-head || b.kind == HelpKind.table-row: VerticalLayout {
+                            HorizontalLayout {
+                                spacing: 12px; padding-top: 2px; padding-bottom: 2px;
+                                StyledText {
+                                    width: (b.wide ? 46% : 28%) * parent.width;
+                                    text: b.text; default-font-size: b.wide ? 12px : 0px;
+                                    default-color: b.kind == HelpKind.table-head ? Dim.text : Palette.foreground;
+                                }
+                                StyledText {
+                                    horizontal-stretch: 1;
+                                    text: b.second;
+                                    default-color: b.kind == HelpKind.table-head ? Dim.text : Palette.foreground;
+                                    link-color: Palette.accent-background;
+                                    link-clicked(link) => { App.help-link(link); root.done(); }
+                                }
+                            }
+                            Rectangle { height: 1px; background: Dim.rule; }
+                        }
+                        if b.kind == HelpKind.picture: VerticalLayout {
+                            spacing: 4px; padding-top: 6px; padding-bottom: 6px;
+                            Rectangle {
+                                height: self.width * b.ratio;
+                                border-width: 1px; border-color: Dim.rule;
+                                Image { width: parent.width; height: parent.height; source: b.picture; image-fit: contain; }
+                                TouchArea { mouse-cursor: pointer; clicked => { root.enlarge(b.picture); } }
+                            }
+                            Text { text: b.plain + (touch ? " (tap to see it full size)" : " (click to see it full size)"); color: Dim.text; font-italic: true; wrap: word-wrap; horizontal-alignment: center; }
+                        }
+                    }
+                    foot := HorizontalLayout {
+                        padding-top: 14px; spacing: 8px;
+                        if App.help-before != "": Button { text: "‹ " + App.help-before; clicked => { App.help-step(-1); root.done(); } }
+                        Rectangle { horizontal-stretch: 1; }
+                        if App.help-after != "": Button { text: App.help-after + " ›"; clicked => { App.help-step(1); root.done(); } }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// A picture of the manual at its full size, over the page, scrolling
+// round it if it's bigger; a click, or Esc, closes it.
+// A QR code (App.qr-big's) over the whole window, as big as fits its
+// shorter side, on white for a camera; a tap anywhere closes it.
+export component QrBig inherits Rectangle {
+    property <length> side: max(0px, min(self.width, self.height) - 32px);
+    background: #ffffff;
+    Image {
+        source: App.qr-big == 1 ? App.my-qr : App.qr-big == 2 ? App.pd-qr : App.device-qr;
+        image-rendering: pixelated;
+        x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+        width: root.side; height: root.side;
+    }
+    TouchArea { clicked => { App.qr-big = 0; } }
+}
+
+export component HelpPicture inherits Rectangle {
+    in property <image> picture;
+    callback close();
+    background: Palette.background;
+    Flickable {
+        content-width: max(self.width, picture.width * 1px);
+        content-height: max(self.height, picture.height * 1px);
+        Image {
+            x: max(0px, (parent.width - self.width) / 2);
+            width: picture.width * 1px; height: picture.height * 1px;
+            source: picture;
+        }
+        TouchArea { clicked => { root.close(); } }
+    }
+    Rectangle {
+        x: parent.width - self.width - 10px; y: 10px;
+        width: close-button.preferred-width; height: close-button.preferred-height;
+        close-button := Button { text: "Close"; clicked => { root.close(); } }
+    }
+}
+
+// Files under way, after their name: how far, how fast and how long is
+// left, each in a column as wide as its widest and right-aligned, so the
+// numbers changing don't move anything (see `swarm_app::progress`).
+export component FileColumns inherits HorizontalLayout {
+    in property <length> font-size: 0px;
+    horizontal-stretch: 0;
+    Rectangle {
+        visible: false; width: 0px; height: 0px;
+        percent-widest := Text { x: 0; y: 0; text: "100%"; font-size: root.font-size; }
+        speed-widest := Text { x: 0; y: 0; text: "88.8 MB/s"; font-size: root.font-size; }
+        left-widest := Text { x: 0; y: 0; text: "8:88:88 left"; font-size: root.font-size; }
+    }
+    Text { width: percent-widest.preferred-width + 8px; text: App.top.progress-percent; font-size: root.font-size; color: Dim.text; horizontal-alignment: right; vertical-alignment: center; }
+    Text { width: speed-widest.preferred-width + 12px; text: App.top.progress-speed; font-size: root.font-size; color: Dim.text; horizontal-alignment: right; vertical-alignment: center; }
+    Text { width: left-widest.preferred-width + 12px; text: App.top.progress-left; font-size: root.font-size; color: Dim.text; horizontal-alignment: right; vertical-alignment: center; }
+}

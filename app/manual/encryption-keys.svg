@@ -1,0 +1,268 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 1440" width="1440" height="1440" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="13" fill="#1d2430">
+  <title>How swarm's encryption keys are made and used</title>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#4a5568"/>
+    </marker>
+    <style>
+      .h { font-weight: bold; font-size: 15px; }
+      .s { font-size: 12px; fill: #3d4756; }
+      .tag { font-size: 11px; font-weight: bold; letter-spacing: 0.06em; }
+      .lbl { font-size: 12px; font-style: italic; fill: #4a5568; }
+      .sec { font-size: 13px; font-weight: bold; letter-spacing: 0.08em; fill: #6b7785; }
+      .line { stroke: #4a5568; stroke-width: 1.6; fill: none; marker-end: url(#arrow); }
+      .head { fill: #f1e8f8; stroke: #7b4fa0; stroke-width: 2; }
+      .seed { fill: #fff1c7; stroke: #b7860b; stroke-width: 2; }
+      .derived { fill: #fff8e3; stroke: #b7860b; stroke-width: 1.5; }
+      .fresh { fill: #e4f4e2; stroke: #3b8a35; stroke-width: 1.5; }
+      .start { fill: #edf0f4; stroke: #6b7785; stroke-width: 1.5; }
+      .use { fill: #e7f0fb; stroke: #2f6db3; stroke-width: 1.5; }
+      .wire { fill: #f3f4f6; stroke: #6b7785; stroke-width: 1.5; }
+      .rng { fill: #2d3748; stroke: #2d3748; }
+    </style>
+  </defs>
+
+  <rect width="1440" height="1440" fill="#ffffff"/>
+
+  <!-- Title -->
+  <text x="720" y="38" text-anchor="middle" font-size="22" font-weight="bold">How swarm's encryption keys are made and used</text>
+  <text x="720" y="62" text-anchor="middle" class="s">Every key starts as random bytes from your computer's secure random generator, or as your passphrase. Nothing comes from a server.</text>
+
+  <!-- Row 0: random generator -->
+  <rect x="340" y="82" width="1060" height="46" rx="8" class="rng"/>
+  <text x="870" y="111" text-anchor="middle" fill="#ffffff" font-size="15" font-weight="bold">Your operating system's secure random number generator</text>
+
+  <line x1="560" y1="128" x2="560" y2="166" class="line"/>
+  <line x1="990" y1="128" x2="990" y2="166" class="line"/>
+  <line x1="1300" y1="128" x2="1300" y2="166" class="line"/>
+  <text x="570" y="152" class="lbl">once, when you make your identity</text>
+  <text x="1000" y="152" class="lbl">every connection</text>
+  <text x="1310" y="152" class="lbl">every start</text>
+
+  <!-- Row 1: the roots -->
+  <rect x="40" y="168" width="260" height="104" rx="8" class="head"/>
+  <text x="56" y="188" class="tag" fill="#5e3a80">ONLY IN YOUR HEAD</text>
+  <text x="56" y="210" class="h">Your passphrase</text>
+  <text x="56" y="230" class="s">You choose it, and type it each</text>
+  <text x="56" y="247" class="s">time swarm starts. Swarm refuses</text>
+  <text x="56" y="264" class="s">one that's easy to guess.</text>
+
+  <rect x="340" y="168" width="440" height="104" rx="8" class="seed"/>
+  <text x="356" y="188" class="tag" fill="#8a6408">YOUR ONE LONG-TERM SECRET</text>
+  <text x="356" y="210" class="h">Recovery seed: 16 random bytes = 12 words</text>
+  <text x="356" y="230" class="s">Made by swarm keygen, and shown to you as 12 words.</text>
+  <text x="356" y="247" class="s">Write them on paper and keep them safe: they bring back</text>
+  <text x="356" y="264" class="s">your identity and everything on your disk.</text>
+
+  <rect x="820" y="168" width="340" height="104" rx="8" class="fresh"/>
+  <text x="836" y="188" class="tag" fill="#2b6826">THROWN AWAY WHEN THE CONNECTION ENDS</text>
+  <text x="836" y="210" class="h">One-off keys, made by each side</text>
+  <text x="836" y="230" class="s">• a one-off X25519 key, for the handshake</text>
+  <text x="836" y="247" class="s">• a 32-byte datagram key for what it sends,</text>
+  <text x="848" y="264" class="s">replaced every hour</text>
+
+  <rect x="1200" y="168" width="200" height="104" rx="8" class="start"/>
+  <text x="1216" y="188" class="tag" fill="#4a5568">NEW EACH START</text>
+  <text x="1216" y="210" class="h">Certificate key</text>
+  <text x="1216" y="230" class="s">ECDSA P-256, for a</text>
+  <text x="1216" y="247" class="s">self-signed TLS certificate</text>
+  <text x="1216" y="264" class="s">that nobody checks.</text>
+
+  <!-- Row 2 -->
+  <line x1="170" y1="272" x2="170" y2="318" class="line"/>
+  <text x="180" y="300" class="lbl">Argon2id</text>
+  <line x1="560" y1="272" x2="560" y2="318" class="line"/>
+  <text x="570" y="300" class="lbl">HKDF-SHA256</text>
+
+  <rect x="40" y="320" width="260" height="96" rx="8" class="head"/>
+  <text x="56" y="342" class="h">Unlock key</text>
+  <text x="56" y="362" class="s">From the passphrase, slowly on</text>
+  <text x="56" y="379" class="s">purpose: 64 MB and half a second</text>
+  <text x="56" y="396" class="s">a try, so guessing takes too long.</text>
+
+  <rect x="340" y="320" width="440" height="96" rx="8" class="derived"/>
+  <text x="356" y="342" class="h">Identity seed: 32 bytes</text>
+  <text x="356" y="362" class="s">Worked out from the recovery seed. Everything below</text>
+  <text x="356" y="379" class="s">comes from it. On disk it's only ever kept sealed,</text>
+  <text x="356" y="396" class="s">and it's in memory only while swarm runs, unlocked.</text>
+
+  <!-- Row 3 -->
+  <line x1="170" y1="416" x2="170" y2="466" class="line"/>
+  <text x="180" y="446" class="lbl">seals</text>
+  <path d="M360,416 L360,434 Q360,440 354,440 L256,440 Q250,440 250,446 L250,466" class="line"/>
+  <text x="262" y="458" class="lbl">kept in</text>
+  <line x1="410" y1="416" x2="410" y2="466" class="line"/>
+  <text x="418" y="446" class="lbl">HKDF</text>
+  <line x1="560" y1="416" x2="560" y2="466" class="line"/>
+  <text x="568" y="446" class="lbl">as it is</text>
+  <line x1="710" y1="416" x2="710" y2="466" class="line"/>
+  <text x="718" y="446" class="lbl">SHA-512</text>
+
+  <rect x="40" y="468" width="260" height="140" rx="8" class="use"/>
+  <text x="56" y="490" class="h">~/.swarm/identity</text>
+  <text x="56" y="510" class="s">The identity seed, sealed with the</text>
+  <text x="56" y="527" class="s">unlock key (XChaCha20-Poly1305).</text>
+  <text x="56" y="544" class="s">Useless without the passphrase.</text>
+  <text x="56" y="566" class="s">Forgotten the passphrase? The 12</text>
+  <text x="56" y="583" class="s">words bring everything back, and</text>
+  <text x="56" y="600" class="s">you choose a new one.</text>
+
+  <rect x="340" y="468" width="140" height="128" rx="8" class="derived"/>
+  <text x="352" y="490" class="h">Storage key</text>
+  <text x="352" y="510" class="s">Seals what's</text>
+  <text x="352" y="527" class="s">kept on your disk.</text>
+
+  <rect x="490" y="468" width="140" height="128" rx="8" class="derived"/>
+  <text x="502" y="490" class="h">Ed25519 key</text>
+  <text x="502" y="510" class="s">Signs. Its public</text>
+  <text x="502" y="527" class="s">half is your swarm</text>
+  <text x="502" y="544" class="s">ID: what you give</text>
+  <text x="502" y="561" class="s">people, and what</text>
+  <text x="502" y="578" class="s">they add as a peer.</text>
+
+  <rect x="640" y="468" width="140" height="128" rx="8" class="derived"/>
+  <text x="652" y="490" class="h">X25519 key</text>
+  <text x="652" y="510" class="s">Agrees keys. Its</text>
+  <text x="652" y="527" class="s">public half comes</text>
+  <text x="652" y="544" class="s">from your swarm ID,</text>
+  <text x="652" y="561" class="s">so there's nothing</text>
+  <text x="652" y="578" class="s">more to share.</text>
+
+  <!-- Row 4: at rest -->
+  <path d="M410,596 L410,624 Q410,630 404,630 L176,630 Q170,630 170,636 L170,658" class="line"/>
+  <text x="180" y="650" class="lbl">seals each record</text>
+
+  <rect x="40" y="660" width="260" height="350" rx="8" class="use"/>
+  <text x="56" y="682" class="h">Everything else on disk</text>
+  <text x="56" y="702" class="s">Messages, posts, peers, channels</text>
+  <text x="56" y="719" class="s">and settings in ~/.swarm.</text>
+  <text x="56" y="743" class="s">• Each line is sealed on its own</text>
+  <text x="68" y="760" class="s">(XChaCha20-Poly1305, with a</text>
+  <text x="68" y="777" class="s">fresh random nonce).</text>
+  <text x="56" y="795" class="s">• Each is tied to its file, so it</text>
+  <text x="68" y="812" class="s">can't be moved to another.</text>
+  <text x="56" y="830" class="s">• Files about a peer have</text>
+  <text x="68" y="847" class="s">scrambled names (HMAC-SHA256),</text>
+  <text x="68" y="864" class="s">so the folder doesn't show</text>
+  <text x="68" y="881" class="s">who you talk to.</text>
+  <text x="56" y="905" class="s">Messages set to delete</text>
+  <text x="56" y="922" class="s">themselves are removed from</text>
+  <text x="56" y="939" class="s">here when their time's up.</text>
+  <text x="56" y="963" class="s">A machine with nobody at it waits,</text>
+  <text x="56" y="980" class="s">locked, until someone unlocks it</text>
+  <text x="56" y="997" class="s">(swarm unlock).</text>
+
+  <!-- Signatures -->
+  <line x1="560" y1="596" x2="560" y2="658" class="line"/>
+  <text x="568" y="626" class="lbl">signs</text>
+  <rect x="340" y="660" width="280" height="350" rx="8" class="use"/>
+  <text x="356" y="682" class="h">Signatures</text>
+  <text x="356" y="702" class="s">For things that are passed on, so</text>
+  <text x="356" y="719" class="s">anyone can check who made them,</text>
+  <text x="356" y="736" class="s">whoever delivered them:</text>
+  <text x="356" y="760" class="s">• your posts</text>
+  <text x="356" y="778" class="s">• your display name</text>
+  <text x="356" y="796" class="s">• channel messages</text>
+  <text x="356" y="814" class="s">• channel membership: joins,</text>
+  <text x="368" y="831" class="s">removals, topic</text>
+  <text x="356" y="849" class="s">• your devices and their keys</text>
+  <text x="356" y="867" class="s">• "where I am now" cards, for</text>
+  <text x="368" y="884" class="s">peers who've moved</text>
+  <text x="356" y="902" class="s">• who's in a conference call,</text>
+  <text x="368" y="919" class="s">their numbers, who left, and</text>
+  <text x="368" y="936" class="s">who removed whom</text>
+  <text x="356" y="962" class="s">A signature proves who wrote</text>
+  <text x="356" y="979" class="s">something. It doesn't hide it:</text>
+  <text x="356" y="996" class="s">the connection does that.</text>
+
+  <!-- Noise handshake -->
+  <line x1="710" y1="596" x2="710" y2="658" class="line"/>
+  <text x="718" y="626" class="lbl">proves it's you</text>
+  <line x1="900" y1="272" x2="900" y2="658" class="line"/>
+  <text x="908" y="626" class="lbl">one-off X25519 keys</text>
+
+  <rect x="640" y="660" width="520" height="112" rx="8" class="fresh"/>
+  <text x="656" y="682" class="h">Noise handshake, at the start of every connection</text>
+  <text x="656" y="701" class="s">Noise_IK_25519_ChaChaPoly_BLAKE2s</text>
+  <text x="656" y="723" class="s">• Both sides prove they hold the key for their swarm ID.</text>
+  <text x="656" y="741" class="s">• The one-off keys are mixed in, so a recording can't be</text>
+  <text x="668" y="758" class="s">decrypted later, even by someone who gets your seed.</text>
+
+  <!-- TLS -->
+  <line x1="1300" y1="272" x2="1300" y2="658" class="line"/>
+  <rect x="1200" y="660" width="200" height="112" rx="8" class="start"/>
+  <text x="1216" y="682" class="h">QUIC with TLS 1.3</text>
+  <text x="1216" y="704" class="s">Wraps every packet, so</text>
+  <text x="1216" y="721" class="s">even the handshake is</text>
+  <text x="1216" y="738" class="s">hidden. Proves nothing</text>
+  <text x="1216" y="755" class="s">about who's at either end.</text>
+
+  <!-- Row 5: stream and cover -->
+  <line x1="765" y1="772" x2="765" y2="818" class="line"/>
+  <text x="775" y="800" class="lbl">session keys</text>
+  <path d="M1080,272 L1080,290 Q1080,300 1170,300 Q1180,300 1180,310 L1180,786 Q1180,796 1170,796 L1045,796 Q1035,796 1035,806 L1035,818" class="line"/>
+  <text x="1025" y="812" text-anchor="end" class="lbl">sent inside the session</text>
+
+  <rect x="640" y="820" width="250" height="190" rx="8" class="use"/>
+  <text x="656" y="842" class="h">The encrypted stream</text>
+  <text x="656" y="860" class="s">ChaCha20-Poly1305</text>
+  <text x="656" y="882" class="s">• messages and posts</text>
+  <text x="656" y="900" class="s">• files and channel traffic</text>
+  <text x="656" y="918" class="s">• setting up calls</text>
+  <text x="656" y="936" class="s">• voice and video when</text>
+  <text x="668" y="953" class="s">cover is off</text>
+  <text x="656" y="977" class="s">The session keys are renewed</text>
+  <text x="656" y="994" class="s">every hour.</text>
+
+  <rect x="910" y="820" width="250" height="190" rx="8" class="use"/>
+  <text x="926" y="842" class="h">Sealed cover packets</text>
+  <text x="926" y="860" class="s">ChaCha20-Poly1305</text>
+  <text x="926" y="882" class="s">When cover is on: voice, video</text>
+  <text x="926" y="899" class="s">and everything else, in packets</text>
+  <text x="926" y="916" class="s">all the same size, on a fixed beat.</text>
+  <text x="926" y="940" class="s">Each packet's number is used once;</text>
+  <text x="926" y="957" class="s">a replayed or forged one is dropped.</text>
+  <text x="926" y="981" class="s">A new datagram key every hour.</text>
+
+  <!-- Row 6: on the wire -->
+  <rect x="40" y="1050" width="1360" height="190" rx="8" class="wire"/>
+  <text x="56" y="1074" class="h">One packet on the wire</text>
+  <text x="56" y="1110" font-weight="bold">UDP</text>
+  <rect x="140" y="1088" width="1244" height="138" rx="6" fill="#ffffff" stroke="#6b7785" stroke-width="1.5"/>
+  <text x="498" y="1108" font-weight="bold">QUIC with TLS 1.3 (certificate key)</text>
+  <rect x="156" y="1124" width="704" height="88" rx="6" fill="#e7f0fb" stroke="#2f6db3" stroke-width="1.5"/>
+  <text x="172" y="1144" font-weight="bold">Noise stream (session keys)</text>
+  <rect x="172" y="1154" width="672" height="44" rx="5" fill="#ffffff" stroke="#2f6db3" stroke-dasharray="4 3"/>
+  <text x="186" y="1172" class="s">a message, post, file piece or call signal,</text>
+  <text x="186" y="1189" class="s">with its author's signature if it has one</text>
+  <rect x="876" y="1124" width="492" height="88" rx="6" fill="#e7f0fb" stroke="#2f6db3" stroke-width="1.5"/>
+  <text x="892" y="1144" font-weight="bold">or: a cover packet (datagram key)</text>
+  <rect x="892" y="1154" width="460" height="44" rx="5" fill="#ffffff" stroke="#2f6db3" stroke-dasharray="4 3"/>
+  <text x="906" y="1172" class="s">voice, video, or a share of the stream's traffic,</text>
+  <text x="906" y="1189" class="s">padded to the same size as every other packet</text>
+
+  <line x1="480" y1="1010" x2="480" y2="1152" class="line"/>
+  <line x1="765" y1="1010" x2="765" y2="1122" class="line"/>
+  <line x1="1035" y1="1010" x2="1035" y2="1122" class="line"/>
+  <line x1="1300" y1="772" x2="1300" y2="1086" class="line"/>
+
+  <!-- Row 7: legend and limits -->
+  <rect x="40" y="1262" width="16" height="16" rx="3" class="head"/>
+  <text x="64" y="1275" class="s">your passphrase</text>
+  <rect x="190" y="1262" width="16" height="16" rx="3" class="seed"/>
+  <text x="214" y="1275" class="s">your long-term secret</text>
+  <rect x="370" y="1262" width="16" height="16" rx="3" class="derived"/>
+  <text x="394" y="1275" class="s">worked out from it</text>
+  <rect x="530" y="1262" width="16" height="16" rx="3" class="fresh"/>
+  <text x="554" y="1275" class="s">new for every connection</text>
+  <rect x="720" y="1262" width="16" height="16" rx="3" class="start"/>
+  <text x="744" y="1275" class="s">new every time swarm starts</text>
+  <rect x="930" y="1262" width="16" height="16" rx="3" class="use"/>
+  <text x="954" y="1275" class="s">where the keys are used</text>
+
+  <text x="40" y="1312" class="h">Not covered by any of this</text>
+  <text x="40" y="1334" class="s">• Anyone with your 12 words, or your passphrase and a copy of your disk, can read everything. Files you've received are saved where you chose, unsealed, for other programs to open.</text>
+  <text x="40" y="1354" class="s">• The path can see that two addresses are talking, though not what they say. Cover mode also hides when and how much. Peers see your IP address, as they must to reach you.</text>
+  <text x="40" y="1374" class="s">• Random numbers that aren't keys: message, file transfer and call ids. SHA-256 checks that each file arrived whole.</text>
+  <text x="40" y="1408" class="s" fill="#6b7785">Libraries: ed25519-dalek, x25519-dalek · snow (Noise) · ring, chacha20poly1305 (sealing) · argon2 · hkdf, hmac, sha2 · bip39 (the 12 words) · quinn, rustls, rcgen (QUIC, TLS)</text>
+</svg>

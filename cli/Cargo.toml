@@ -1,0 +1,33 @@
+[package]
+name = "swarm-cli"
+version = "1.0.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+[[bin]]
+name = "swarm"
+path = "src/main.rs"
+
+[features]
+default = ["gui"]
+gui = ["dep:swarm-desktop"]
+
+[dependencies]
+swarm-core = { path = "../core" }
+swarm-app = { path = "../app" }
+# swarm's window, opened unless --tui (or there's no screen). Built in by
+# default; `--no-default-features` leaves it out.
+swarm-desktop = { path = "../desktop", optional = true }
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util", "signal"] }
+anyhow = "1"
+base64 = "0.22"
+ratatui = { version = "0.30.2", features = ["unstable-rendered-line-info"] }
+crossterm = "0.29.0"
+unicode-width = "0.2"
+rpassword = "7"
+zeroize = "1"
+
+# Windows: pointing the background log away from the terminal UI.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Console"] }
