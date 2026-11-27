@@ -51,7 +51,10 @@ Swarm uses UDP port 1977 by default.
 
 ## Installing
 
-Download the file for your system from the releases page.
+Download the file for your system from the
+[latest release](https://github.com/CWNE88/swarm/releases/latest) (under
+**Assets** on that page). The repository itself holds only the source
+code, never built programs.
 
 - **Windows** – Swarm isn't signed with a paid code-signing certificate,
   so Windows may say "Windows protected your PC" the first time it runs.
@@ -82,7 +85,8 @@ Swarm is written in Rust (edition 2024). On Debian 13:
         libudev-dev libinput-dev libgbm-dev libdrm-dev libseat-dev libwayland-dev
     cargo build --release
 
-The binary is `target/release/swarm`. `tools/build-all.sh` builds every
+The binary is `target/release/swarm`: that folder is made by the build,
+so it isn't in the repository. `tools/build-all.sh` builds every
 platform at once; what each cross build needs is at the top of
 `tools/build-windows.sh`, `tools/build-android.sh` and
 `.cargo/config.toml`.
