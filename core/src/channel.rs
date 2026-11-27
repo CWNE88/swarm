@@ -322,34 +322,64 @@ impl Roster {
 ///    themselves in, with nothing before it, starts it. A `Left` counts
 ///    only from the one leaving; a name or timer only as the signer's own.
 /// 4. The entries that count are applied in order.
+///
+/// An entry's time is the signer's clock, so it's never taken as earlier
+/// than the entries it comes after: nobody can date a joining or a timer
+/// back past what they'd seen.
 pub fn replay(channel: &ChannelId, events: &[RosterEvent]) -> Roster {
+    replay_with(channel, events, &HashMap::new())
+}
+
+/// `replay`, with when this device first had each timer change
+/// (`timers_seen`): a timer is in force here from no earlier than that,
+/// less `SPAN_SLACK`, so one dated back can't delete what's already here.
+fn replay_with(channel: &ChannelId, events: &[RosterEvent], seen: &HashMap<EventId, u64>) -> Roster {
     let mut roster = Roster::default();
+    let mut effective: HashMap<EventId, u64> = HashMap::new();
     for event in counted(channel, events) {
-        apply(&mut roster, event);
+        let id = event_id(channel, event);
+        // Dated ahead (a fast clock), it counts as no later than a little
+        // past now: nothing after it is pushed into the future with it.
+        let own = event.at.min(unix_now() + AHEAD_SLACK);
+        let at = event.prev.iter().filter_map(|p| effective.get(p)).fold(own, |at, p| at.max(*p));
+        effective.insert(id, at);
+        let at = match (&event.action, seen.get(&id)) {
+            (RosterAction::Timer { .. }, Some(seen)) => at.max(seen.saturating_sub(SPAN_SLACK)),
+            _ => at,
+        };
+        apply(&mut roster, event, at);
     }
     roster.timers.sort_by_key(|(at, _)| *at);
     roster
 }
 
-fn apply(roster: &mut Roster, event: &RosterEvent) {
+/// The roster as this device should act on it: `replay`, with timers in
+/// force from no earlier than they reached here (see `replay_with`).
+pub fn replay_here(base: &Path, channel: &ChannelId) -> std::io::Result<Roster> {
+    Ok(replay_with(channel, &load_roster(base, channel)?, &load_timers_seen(base, channel)?))
+}
+
+/// `event` applied, as of `at` (its time, never earlier than what it
+/// comes after: see `replay`).
+fn apply(roster: &mut Roster, event: &RosterEvent, at: u64) {
     match &event.action {
         RosterAction::Joined => {
             if !roster.members.contains_key(&event.subject) {
-                roster.spans.entry(event.subject).or_default().push(Span { from: event.at, until: None });
-                roster.members.insert(event.subject, Member { joined_at: event.at, added_by: event.by });
+                roster.spans.entry(event.subject).or_default().push(Span { from: at, until: None });
+                roster.members.insert(event.subject, Member { joined_at: at, added_by: event.by });
             }
         }
         RosterAction::Left => {
             if roster.members.remove(&event.subject).is_some()
                 && let Some(span) = roster.spans.get_mut(&event.subject).and_then(|s| s.last_mut())
             {
-                span.until = Some(event.at);
+                span.until = Some(at);
             }
         }
         RosterAction::Named { text } => {
-            roster.name = (!text.trim().is_empty()).then(|| GroupName { text: text.clone(), by: event.by, at: event.at });
+            roster.name = (!text.trim().is_empty()).then(|| GroupName { text: text.clone(), by: event.by, at });
         }
-        RosterAction::Timer { seconds } => roster.timers.push((event.at, *seconds)),
+        RosterAction::Timer { seconds } => roster.timers.push((at, *seconds)),
     }
 }
 
@@ -629,7 +659,41 @@ pub fn load_roster(base: &Path, channel: &ChannelId) -> std::io::Result<Vec<Rost
 /// through `merge_roster` instead.
 pub fn append_roster_event(base: &Path, channel: &ChannelId, event: &RosterEvent) -> std::io::Result<()> {
     let _guard = store::lock();
-    store::append_line(&channel_dir(base, channel)?.join("roster"), format_roster_event(event).trim_end())
+    store::append_line(&channel_dir(base, channel)?.join("roster"), format_roster_event(event).trim_end())?;
+    note_timers_seen(base, channel, std::slice::from_ref(event))
+}
+
+/// How far ahead of this device's clock a roster entry's time is taken
+/// as it is: clocks needn't agree, but one from the future would push
+/// everything after it into the future too. Later, it counts as this far
+/// ahead (see `replay_with`; posts, see `merge_posts`).
+pub const AHEAD_SLACK: u64 = 10 * 60;
+
+/// When this device first had each of `channel`'s timer changes, by
+/// entry id (`timers_seen`, one `<id hex> <unix time>` a line).
+fn load_timers_seen(base: &Path, channel: &ChannelId) -> std::io::Result<HashMap<EventId, u64>> {
+    let path = channel_dir(base, channel)?.join("timers_seen");
+    if !path.exists() {
+        return Ok(HashMap::new());
+    }
+    Ok(store::read(&path)?
+        .lines()
+        .filter_map(|line| {
+            let (id, at) = line.split_once(' ')?;
+            Some((parse_event_id(id)?, at.parse().ok()?))
+        })
+        .collect())
+}
+
+/// Notes the timer changes among `events` as had here now (store lock
+/// held by the caller).
+fn note_timers_seen(base: &Path, channel: &ChannelId, events: &[RosterEvent]) -> std::io::Result<()> {
+    let path = channel_dir(base, channel)?.join("timers_seen");
+    let now = unix_now();
+    for event in events.iter().filter(|e| matches!(e.action, RosterAction::Timer { .. })) {
+        store::append_line(&path, &format!("{} {now}", hex(&event_id(channel, event))))?;
+    }
+    Ok(())
 }
 
 /// Merges fetched roster entries in, keeping only ones that verify and
@@ -652,6 +716,7 @@ pub fn merge_roster(base: &Path, channel: &ChannelId, fetched: &[RosterEvent]) -
         fs::create_dir_all(&dir)?;
         let contents: String = all.iter().map(format_roster_event).collect();
         store::write_atomic(&path, contents)?;
+        note_timers_seen(base, channel, &new)?;
     }
     Ok(new)
 }
@@ -674,6 +739,13 @@ static POSTS_KEPT: store::Kept<ChannelPost> = store::Kept::new(32);
 /// arrive, so a busy group's history can't grow without bound.
 pub const MAX_POSTS: usize = 5000;
 
+/// The most groups kept on one device, and the most of those that being
+/// added to has made but that aren't caught up on yet (see
+/// `node::channels`): what a contact adding us to group after group can
+/// leave behind.
+pub const MOST_GROUPS: usize = 1000;
+pub const MOST_WAITING_GROUPS: usize = 20;
+
 /// Merges fetched posts in, keeping only ones that verify, were written
 /// by a member at the time (per the roster stored here — so merge the
 /// roster first), aren't from before `me` (this device's user) was
@@ -684,7 +756,7 @@ pub const MAX_POSTS: usize = 5000;
 /// (and kept) — what's worth passing on.
 pub fn merge_posts(base: &Path, channel: &ChannelId, me: &[u8; 32], fetched: &[ChannelPost]) -> std::io::Result<Vec<ChannelPost>> {
     let path = channel_dir(base, channel)?.join("posts");
-    let roster = replay(channel, &load_roster(base, channel)?);
+    let roster = replay_here(base, channel)?;
     let Some(joined) = roster.joined(me) else { return Ok(Vec::new()) };
     let _guard = store::lock();
     let mut all = load_posts(base, channel)?;
@@ -709,9 +781,15 @@ pub fn merge_posts(base: &Path, channel: &ChannelId, me: &[u8; 32], fetched: &[C
     }
     all.sort_by_key(|p| p.created_at);
     if all.len() > MAX_POSTS {
-        all.drain(..all.len() - MAX_POSTS);
-        let kept: HashSet<[u8; 64]> = all.iter().map(|p| p.signature).collect();
-        new.retain(|p| kept.contains(&p.signature));
+        // The oldest go, and before them any dated well ahead of this
+        // device's clock (a fast clock, or posts sent to push out the
+        // rest): those are kept until the group's full, then go first.
+        let ahead = now + AHEAD_SLACK;
+        let mut order: Vec<usize> = (0..all.len()).collect();
+        order.sort_by_key(|&i| (all[i].created_at <= ahead, all[i].created_at, i));
+        let gone: HashSet<[u8; 64]> = order[..all.len() - MAX_POSTS].iter().map(|&i| all[i].signature).collect();
+        all.retain(|p| !gone.contains(&p.signature));
+        new.retain(|p| !gone.contains(&p.signature));
     }
     let contents: String = all.iter().map(format_channel_post).collect();
     store::write_atomic(&path, contents)?;
@@ -723,7 +801,7 @@ pub fn merge_posts(base: &Path, channel: &ChannelId, me: &[u8; 32], fetched: &[C
 pub fn sweep(base: &Path, now: u64) -> std::io::Result<usize> {
     let mut gone = 0;
     for channel in known_channels(base)? {
-        let roster = replay(&channel, &load_roster(base, &channel)?);
+        let roster = replay_here(base, &channel)?;
         if roster.timers.iter().all(|(_, s)| *s == 0) {
             continue;
         }
@@ -734,6 +812,25 @@ pub fn sweep(base: &Path, now: u64) -> std::io::Result<usize> {
         if kept.len() < all.len() {
             gone += all.len() - kept.len();
             store::write_atomic(&path, kept.into_iter().map(format_channel_post).collect::<String>())?;
+        }
+    }
+    Ok(gone)
+}
+
+/// Deletes every group `me` was told they'd been added to but never
+/// caught up on (so never in it, as far as its roster here knows) whose
+/// roster is older than `wait`. How many went.
+pub fn drop_waiting(base: &Path, me: &[u8; 32], wait: std::time::Duration) -> std::io::Result<usize> {
+    let mut gone = 0;
+    for channel in known_channels(base)? {
+        let roster = replay(&channel, &load_roster(base, &channel)?);
+        if roster.ever_in(me) {
+            continue;
+        }
+        let made = fs::metadata(channel_dir(base, &channel)?.join("roster")).and_then(|m| m.modified());
+        if made.is_ok_and(|made| made.elapsed().is_ok_and(|age| age > wait)) {
+            delete(base, &channel)?;
+            gone += 1;
         }
     }
     Ok(gone)
@@ -1059,6 +1156,92 @@ mod tests {
         merge_posts(&dir, &channel, &ann.public_key_bytes(), &[kept, goes]).unwrap();
         assert_eq!(sweep(&dir, now + 3600).unwrap(), 1);
         assert_eq!(load_posts(&dir, &channel).unwrap().into_iter().map(|p| p.text).collect::<Vec<_>>(), vec!["before the timer"]);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A member dating an entry back gets no further back than the
+    /// entries it comes after: a joining or a timer from 1970 counts from
+    /// the signer's own joining.
+    #[test]
+    fn an_entry_is_never_earlier_than_what_it_comes_after() {
+        let (ann, bob, cat) = (Identity::generate(), Identity::generate(), Identity::generate());
+        let (channel, first) = group(&ann);
+        let first = redate(&channel, &ann, first, 1000);
+        let bob_in = redate(&channel, &ann, ev(&channel, &ann, &[&first], &bob, RosterAction::Joined), 5000);
+        let cat_in = redate(&channel, &bob, ev(&channel, &bob, &[&bob_in], &cat, RosterAction::Joined), 0);
+        let timer = redate(&channel, &bob, ev(&channel, &bob, &[&cat_in], &bob, RosterAction::Timer { seconds: 1 }), 0);
+        let roster = replay(&channel, &[first, bob_in, cat_in, timer]);
+        assert_eq!(roster.joined(&cat.public_key_bytes()), Some(5000), "cat's history starts no earlier than bob's");
+        assert_eq!(roster.expires(4999), 0, "nothing from before bob joined is touched by his timer");
+        assert_ne!(roster.expires(5000), 0);
+    }
+
+    /// A timer dated back deletes nothing this device already had from
+    /// before it arrived; one dated as it's set works as ever.
+    #[test]
+    fn a_timer_dated_back_deletes_nothing_already_here() {
+        let dir = scratch_dir("timer-back");
+        let (ann, bob) = (Identity::generate(), Identity::generate());
+        let (channel, first) = group(&ann);
+        let first = redate(&channel, &ann, first, 1000);
+        let bob_in = redate(&channel, &ann, ev(&channel, &ann, &[&first], &bob, RosterAction::Joined), 1001);
+        merge_roster(&dir, &channel, &[first, bob_in.clone()]).unwrap();
+        let now = unix_now();
+        let said = post_at(&channel, &ann, now - 3 * 3600, "said earlier");
+        merge_posts(&dir, &channel, &ann.public_key_bytes(), &[said]).unwrap();
+        let timer = redate(&channel, &bob, ev(&channel, &bob, &[&bob_in], &bob, RosterAction::Timer { seconds: 1 }), 1002);
+        merge_roster(&dir, &channel, &[timer]).unwrap();
+        assert_eq!(sweep(&dir, now + 60).unwrap(), 0, "what was here before the timer stays");
+        let later = post_at(&channel, &ann, now + 30, "under it");
+        merge_posts(&dir, &channel, &ann.public_key_bytes(), &[later]).unwrap();
+        assert_eq!(sweep(&dir, now + 60).unwrap(), 1, "what's written once it's here goes");
+        assert_eq!(replay(&channel, &load_roster(&dir, &channel).unwrap()).expires(2000), 1 + 2000, "the roster itself still says when it was set");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// What's dated ahead of this device's clock (a fast clock) is kept,
+    /// but an adding from next year starts its history now, and a group's
+    /// worth of posts from the future push out nothing: once the group's
+    /// full, they're the first to go.
+    #[test]
+    fn what_is_dated_ahead_pushes_nothing_out() {
+        let dir = scratch_dir("ahead");
+        let (ann, bob) = (Identity::generate(), Identity::generate());
+        let (channel, first) = group(&ann);
+        let first = redate(&channel, &ann, first, 1000);
+        let now = unix_now();
+        let year = 365 * 24 * 3600;
+        let bob_in = redate(&channel, &ann, ev(&channel, &ann, &[&first], &bob, RosterAction::Joined), now + year);
+        assert_eq!(merge_roster(&dir, &channel, &[first, bob_in]).unwrap().len(), 2, "both kept");
+        let joined = replay(&channel, &load_roster(&dir, &channel).unwrap()).joined(&bob.public_key_bytes()).unwrap();
+        assert!(joined <= unix_now() + AHEAD_SLACK, "bob's history starts about now, not next year");
+        let before = post_at(&channel, &ann, now - 60, "said before");
+        merge_posts(&dir, &channel, &ann.public_key_bytes(), &[before]).unwrap();
+        let future: Vec<ChannelPost> = (0..MAX_POSTS as u64).map(|i| post_at(&channel, &ann, now + year + i, "from the future")).collect();
+        merge_posts(&dir, &channel, &ann.public_key_bytes(), &future).unwrap();
+        let after = post_at(&channel, &ann, unix_now(), "said after");
+        let kept: Vec<String> = merge_posts(&dir, &channel, &ann.public_key_bytes(), &[after]).unwrap().into_iter().map(|p| p.text).collect();
+        assert_eq!(kept, vec!["said after"], "what's said after isn't pushed out");
+        let texts: Vec<String> = load_posts(&dir, &channel).unwrap().into_iter().map(|p| p.text).collect();
+        assert_eq!(texts.len(), MAX_POSTS);
+        assert!(texts.contains(&"said before".to_string()) && texts.contains(&"said after".to_string()), "nor what was said before");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A group we were told we're in but never caught up on goes after a
+    /// while; one we're in, or left, stays.
+    #[test]
+    fn a_group_never_caught_up_on_goes() {
+        let dir = scratch_dir("waiting");
+        let (ann, bob) = (Identity::generate(), Identity::generate());
+        let (theirs, their_first) = group(&ann);
+        let bob_in = ev(&theirs, &ann, &[&their_first], &bob, RosterAction::Joined);
+        merge_roster(&dir, &theirs, &[bob_in]).unwrap();
+        let (ours, our_first) = group(&bob);
+        merge_roster(&dir, &ours, &[our_first]).unwrap();
+        assert_eq!(drop_waiting(&dir, &bob.public_key_bytes(), std::time::Duration::from_secs(3600)).unwrap(), 0, "not yet");
+        assert_eq!(drop_waiting(&dir, &bob.public_key_bytes(), std::time::Duration::ZERO).unwrap(), 1);
+        assert!(!exists(&dir, &theirs) && exists(&dir, &ours));
         fs::remove_dir_all(&dir).unwrap();
     }
 

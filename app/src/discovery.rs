@@ -19,6 +19,10 @@
 //! accepts the request or doesn't.
 
 use std::collections::HashMap;
+
+/// The most devices heard on the LAN kept at once: far more than any
+/// office has, few enough that a flood of made-up answers costs nothing.
+const MOST_HEARD: usize = 512;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -387,6 +391,10 @@ fn on_packet(packet: &[u8], from: SocketAddr, said: &Option<Advert>, last_answer
             }
         }
         addresses.truncate(8);
+        // A LAN full of made-up answers fills no more than this.
+        if !s.heard.contains_key(&entry) && s.heard.len() >= MOST_HEARD {
+            continue;
+        }
         s.heard.insert(entry, (heard.name, addresses, until));
     }
 }

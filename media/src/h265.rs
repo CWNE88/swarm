@@ -302,6 +302,10 @@ pub struct Sps {
 /// eight times the largest level's most in a picture (A.4.1).
 const MOST_SIDE: u32 = 16_888;
 
+/// The most pixels in a picture: as many as H.264's largest (see
+/// `h264::MOST_MBS`), 8K or so. Each side may be longer, but not both.
+const MOST_PIXELS: u64 = crate::h264::MOST_MBS as u64 * 256;
+
 impl Sps {
     /// From an SPS NAL unit (its header included). `None` for what this
     /// doesn't read (scaling lists, long-term pictures in the SPS, more
@@ -365,7 +369,10 @@ impl Sps {
         }
         sps.temporal_mvp = bits.flag()?;
         sps.strong_intra_smoothing = bits.flag()?;
-        let within = sps.width <= MOST_SIDE && sps.height <= MOST_SIDE && sps.conformance.iter().all(|&c| c <= MOST_SIDE);
+        let within = sps.width <= MOST_SIDE
+            && sps.height <= MOST_SIDE
+            && u64::from(sps.width) * u64::from(sps.height) <= MOST_PIXELS
+            && sps.conformance.iter().all(|&c| c <= MOST_SIDE);
         (within && sps.id <= 15 && sps.shown().is_some()).then_some(sps)
     }
 
@@ -526,11 +533,23 @@ pub struct Tiles {
 impl Tiles {
     /// Each column's width and each row's height in coding tree blocks,
     /// less one (6.5.1), for a picture `sps` describes.
+    /// Whether these tiles fit a picture `sps` describes: no more columns
+    /// or rows than it has blocks (6.5.1), and the sizes given leaving
+    /// room for the last. Past that, `sizes_minus1` means nothing.
+    pub fn fit(&self, sps: &Sps) -> bool {
+        let (ctbs_x, ctbs_y) = sps.ctbs();
+        let room = |given: &[u32], count: u32, total: u32| {
+            let used: u64 = given.iter().map(|s| u64::from(*s) + 1).sum();
+            count <= total && (given.is_empty() || used < u64::from(total))
+        };
+        room(&self.column_widths_minus1, self.columns_minus1 + 1, ctbs_x) && room(&self.row_heights_minus1, self.rows_minus1 + 1, ctbs_y)
+    }
+
     pub fn sizes_minus1(&self, sps: &Sps) -> (Vec<u32>, Vec<u32>) {
         let (ctbs_x, ctbs_y) = sps.ctbs();
         let spread = |given: &[u32], count: u32, total: u32| -> Vec<u32> {
             if given.is_empty() {
-                (0..count).map(|i| ((i + 1) * total) / count - (i * total) / count - 1).collect()
+                (0..count).map(|i| (((i + 1) * total) / count - (i * total) / count).saturating_sub(1)).collect()
             } else {
                 let mut sizes = given.to_vec();
                 let used = given.iter().fold(0u32, |used, s| used.saturating_add(s.saturating_add(1)));
@@ -1189,6 +1208,7 @@ mod tests {
             Sps { width: 1 << 30, ..sps.clone() },
             Sps { height: 1 << 30, ..sps.clone() },
             Sps { conformance: [u32::MAX - 1, u32::MAX - 1, 0, 0], ..sps.clone() },
+            Sps { width: 16_000, height: 16_000, ..sps.clone() },
         ] {
             assert_eq!(Sps::parse(&wrong.write()), None, "{wrong:?}");
         }
@@ -1215,6 +1235,14 @@ mod tests {
         assert_eq!(uniform.sizes_minus1(&sps).0, vec![6, 7, 6, 7]);
         let huge = Tiles { columns_minus1: 18, rows_minus1: 0, column_widths_minus1: vec![u32::MAX - 1; 18], ..Tiles::default() };
         assert_eq!(huge.sizes_minus1(&sps).0[18], 0);
+        // And they're refused before reaching a decoder: sizes that
+        // don't add up, or more tiles than a picture has blocks.
+        assert!(tiles.fit(&sps) && uniform.fit(&sps));
+        assert!(!huge.fit(&sps));
+        let tiny = Sps { width: 64, height: 64, ..sps.clone() };
+        let many = Tiles { columns_minus1: 18, rows_minus1: 0, ..Tiles::default() };
+        assert!(!many.fit(&tiny));
+        assert!(many.sizes_minus1(&tiny).0.iter().all(|&c| c == 0), "no underflow");
         assert_eq!(nal_type(&write_vps(&sps, 30)), Some(VPS));
     }
 

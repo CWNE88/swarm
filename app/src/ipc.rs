@@ -6,10 +6,12 @@
 //!   its owner can open.
 //! - **Windows:** a named pipe, `\\.\pipe\swarm-<n>`, `<n>` worked out from
 //!   the data folder's path (so two data folders never share one, as two
-//!   socket files wouldn't). Remote clients are refused. Windows' default
-//!   pipe security gives full access only to its creator, administrators
-//!   and the system; anyone else can at most open it to read — and a
-//!   request has to be written, so they can't make one.
+//!   socket files wouldn't). Remote clients are refused. The pipe is made
+//!   owned by this user's account, and only that account and the system
+//!   may open it. As its name can be worked out (and pipes listed), a
+//!   client checks the pipe it opened is owned by its own account before
+//!   saying anything (a passphrase, even): another user who made one of
+//!   that name first can't make it theirs.
 
 use std::io;
 use std::path::Path;
@@ -82,14 +84,105 @@ mod imp {
     pub fn bind(dir: &Path) -> io::Result<Listener> {
         std::fs::create_dir_all(dir)?;
         let name = pipe_name(dir);
-        let next = ServerOptions::new().first_pipe_instance(true).reject_remote_clients(true).create(&name)?;
+        // `first_pipe_instance`: fails if another swarm (or anyone else)
+        // already has it.
+        let next = create(ServerOptions::new().first_pipe_instance(true).reject_remote_clients(true), &name)?;
         Ok(Listener { name, next })
+    }
+
+    /// An instance of the pipe, owned by this user and open to nobody
+    /// else (and the system).
+    fn create(options: &mut ServerOptions, name: &str) -> io::Result<NamedPipeServer> {
+        use windows_sys::Win32::Foundation::LocalFree;
+        use windows_sys::Win32::Security::Authorization::{ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1};
+        use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
+        let sid = own::sid_string()?;
+        let sddl: Vec<u16> = format!("O:{sid}D:P(A;;GA;;;{sid})(A;;GA;;;SY)").encode_utf16().chain([0]).collect();
+        let mut descriptor = std::ptr::null_mut();
+        // Safe: a NUL-ended string, and the descriptor it makes freed below.
+        if unsafe { ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.as_ptr(), SDDL_REVISION_1, &mut descriptor, std::ptr::null_mut()) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let mut attributes = SECURITY_ATTRIBUTES { nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32, lpSecurityDescriptor: descriptor, bInheritHandle: 0 };
+        // Safe: the attributes and their descriptor outlive the call.
+        let made = unsafe { options.create_with_security_attributes_raw(name, &mut attributes as *mut _ as *mut _) };
+        unsafe { LocalFree(descriptor) };
+        made
+    }
+
+    /// This process's user, and pipes' owners checked against it.
+    mod own {
+        use std::io;
+        use windows_sys::Win32::Foundation::{CloseHandle, LocalFree, HANDLE};
+        use windows_sys::Win32::Security::Authorization::{ConvertSidToStringSidW, GetSecurityInfo, SE_KERNEL_OBJECT};
+        use windows_sys::Win32::Security::{EqualSid, GetTokenInformation, TokenUser, OWNER_SECURITY_INFORMATION, TOKEN_QUERY, TOKEN_USER};
+        use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+        /// This process's user: a `TOKEN_USER`, its SID inside it.
+        struct User(Vec<u64>);
+
+        impl User {
+            fn get() -> io::Result<User> {
+                let mut token: HANDLE = std::ptr::null_mut();
+                // Safe: our own process's token, closed below.
+                if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                let mut buffer = vec![0u64; 64];
+                let mut needed = 0u32;
+                let ok = unsafe { GetTokenInformation(token, TokenUser, buffer.as_mut_ptr().cast(), (buffer.len() * 8) as u32, &mut needed) };
+                unsafe { CloseHandle(token) };
+                if ok == 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(User(buffer))
+            }
+
+            fn sid(&self) -> *mut core::ffi::c_void {
+                // Safe: filled in by `GetTokenInformation` as a TOKEN_USER.
+                unsafe { (*(self.0.as_ptr() as *const TOKEN_USER)).User.Sid }
+            }
+        }
+
+        /// This user's SID, as SDDL writes it ("S-1-5-21-…").
+        pub fn sid_string() -> io::Result<String> {
+            let user = User::get()?;
+            let mut text = std::ptr::null_mut();
+            // Safe: a SID from the token; the string it makes freed below.
+            if unsafe { ConvertSidToStringSidW(user.sid(), &mut text) } == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            let len = (0..).take_while(|&i| unsafe { *text.add(i) } != 0).count();
+            let sid = String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(text, len) });
+            unsafe { LocalFree(text.cast()) };
+            Ok(sid)
+        }
+
+        /// That the pipe `handle` is to is owned by this user: nothing's
+        /// said to one another user made.
+        pub fn check(handle: HANDLE) -> io::Result<()> {
+            let user = User::get()?;
+            let (mut owner, mut descriptor) = (std::ptr::null_mut(), std::ptr::null_mut());
+            // Safe: an open handle; the descriptor it gives freed below
+            // (`owner` points into it).
+            let error = unsafe { GetSecurityInfo(handle, SE_KERNEL_OBJECT, OWNER_SECURITY_INFORMATION, &mut owner, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(), &mut descriptor) };
+            if error != 0 {
+                return Err(io::Error::from_raw_os_error(error as i32));
+            }
+            let same = unsafe { EqualSid(owner, user.sid()) } != 0;
+            unsafe { LocalFree(descriptor) };
+            if same {
+                Ok(())
+            } else {
+                Err(io::Error::new(io::ErrorKind::PermissionDenied, "the control pipe is another user's: not swarm's"))
+            }
+        }
     }
 
     impl Listener {
         pub async fn accept(&mut self) -> io::Result<ServerStream> {
             self.next.connect().await?;
-            let fresh = ServerOptions::new().reject_remote_clients(true).create(&self.name)?;
+            let fresh = create(ServerOptions::new().reject_remote_clients(true), &self.name)?;
             Ok(std::mem::replace(&mut self.next, fresh))
         }
     }
@@ -102,6 +195,11 @@ mod imp {
         for _ in 0..20 {
             match ClientOptions::new().open(&name) {
                 Err(e) if e.raw_os_error() == Some(PIPE_BUSY) => tokio::time::sleep(Duration::from_millis(50)).await,
+                Ok(pipe) => {
+                    use std::os::windows::io::AsRawHandle;
+                    own::check(pipe.as_raw_handle() as _)?;
+                    return Ok(pipe);
+                }
                 other => return other,
             }
         }
@@ -115,6 +213,11 @@ mod imp {
         for _ in 0..20 {
             match std::fs::OpenOptions::new().read(true).write(true).open(&name) {
                 Err(e) if e.raw_os_error() == Some(PIPE_BUSY) => std::thread::sleep(Duration::from_millis(50)),
+                Ok(pipe) => {
+                    use std::os::windows::io::AsRawHandle;
+                    own::check(pipe.as_raw_handle() as _)?;
+                    return Ok(pipe);
+                }
                 other => return other,
             }
         }

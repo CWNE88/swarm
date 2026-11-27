@@ -191,6 +191,15 @@ const HIGH_PROFILES: [u32; 13] = [100, 110, 122, 244, 44, 83, 86, 118, 128, 138,
 /// pixels.
 const MOST_MBS_ACROSS: u32 = 1055;
 
+/// The most macroblocks in a picture: the largest level's (6.2, A.3.1),
+/// 8192 by 4352 pixels or so. Each side may be longer, but not both:
+/// every surface a decoder holds is this big.
+pub const MOST_MBS: u32 = 139_264;
+
+/// The most reference frames a stream may keep (A.3.1's largest
+/// MaxDpbFrames): each is a surface held.
+const MOST_REFERENCES: u32 = 16;
+
 /// A sequence parameter set.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Sps {
@@ -274,6 +283,8 @@ impl Sps {
             && sps.log2_max_pic_order_cnt_lsb_minus4 <= 12
             && sps.width_in_mbs <= MOST_MBS_ACROSS
             && sps.height_in_map_units <= MOST_MBS_ACROSS
+            && sps.width_in_mbs * sps.height_in_mbs() <= MOST_MBS
+            && sps.max_num_ref_frames <= MOST_REFERENCES
             && sps.crop.iter().all(|&c| c <= 16 * MOST_MBS_ACROSS);
         (within && sps.id <= 31 && sps.shown().is_some()).then_some(sps)
     }
@@ -719,6 +730,12 @@ mod tests {
             Sps { width_in_mbs: 1 << 30, ..sps.clone() },
             Sps { height_in_map_units: 1 << 30, ..sps.clone() },
             Sps { crop: [u32::MAX - 1, u32::MAX - 1, 0, 0], ..sps.clone() },
+            // Each side within bounds, but a picture of a gigapixel, or
+            // more references than any level keeps: surfaces enough to
+            // exhaust any graphics card's memory, from one frame.
+            Sps { width_in_mbs: 1000, height_in_map_units: 1000, ..sps.clone() },
+            Sps { max_num_ref_frames: 17, ..sps.clone() },
+            Sps { max_num_ref_frames: u32::MAX - 1, ..sps.clone() },
         ] {
             assert_eq!(Sps::parse(&wrong.write()), None, "{wrong:?}");
         }

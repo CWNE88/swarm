@@ -37,7 +37,7 @@
 use crate::lock::Locked;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use curve25519_dalek::edwards::CompressedEdwardsY;
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use sha2::{Digest, Sha512};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519Secret};
 
@@ -318,8 +318,11 @@ pub fn verify(public_key: &[u8; 32], message: &[u8], signature: &[u8; 64]) -> bo
     if GOOD.locked().as_ref().is_some_and(|good| good.contains(&seen)) {
         return true;
     }
+    // Strict: a weak key (of small order), for which signatures can be
+    // made without its secret, and signatures written in more than one
+    // way, are refused.
     let Ok(verifying_key) = VerifyingKey::from_bytes(public_key) else { return false };
-    let ok = verifying_key.verify(message, &Signature::from_bytes(signature)).is_ok();
+    let ok = !verifying_key.is_weak() && verifying_key.verify_strict(message, &Signature::from_bytes(signature)).is_ok();
     if ok {
         let mut good = GOOD.locked();
         let good = good.get_or_insert_with(HashSet::new);
@@ -340,10 +343,13 @@ pub fn verify(public_key: &[u8; 32], message: &[u8], signature: &[u8; 64]) -> bo
 /// handshake can derive what they need from it.
 ///
 /// Errs if `ed25519_public_key` isn't a valid compressed Edwards point
-/// (a mistyped or made-up key, about half the time).
+/// (a mistyped or made-up key, about half the time), or is one of the
+/// few weak ones (of small order): no key pair has one, and a handshake
+/// with it would give a shared secret anyone could work out.
 pub fn ed25519_public_key_to_x25519(ed25519_public_key: &[u8; 32]) -> Result<[u8; 32], IdentityError> {
     CompressedEdwardsY(*ed25519_public_key)
         .decompress()
+        .filter(|point| !point.is_small_order())
         .map(|point| point.to_montgomery().to_bytes())
         .ok_or(IdentityError::InvalidEncoding)
 }
@@ -526,6 +532,22 @@ mod tests {
         let identity = Identity::generate();
         let converted = ed25519_public_key_to_x25519(&identity.public_key_bytes()).unwrap();
         assert_eq!(converted, identity.x25519_public_key_bytes());
+    }
+
+    #[test]
+    fn a_weak_key_signs_nothing_and_shakes_no_hands() {
+        // The neutral point as the key: with R the same and s zero, a
+        // non-strict check takes that "signature" for any message at all.
+        let mut weak = [0u8; 32];
+        weak[0] = 1;
+        let mut forged = [0u8; 64];
+        forged[0] = 1;
+        assert!(!verify(&weak, b"anything", &forged));
+        assert!(!verify(&weak, b"something else", &forged));
+        assert!(ed25519_public_key_to_x25519(&weak).is_err());
+        // An ordinary key still works.
+        let identity = Identity::generate();
+        assert!(verify(&identity.public_key_bytes(), b"hello", &identity.sign(b"hello")));
     }
 
     #[test]

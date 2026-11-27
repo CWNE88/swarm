@@ -324,8 +324,8 @@ impl Active {
                 continue;
             }
             conference.heard_through.remove(&from);
-            self.relays.incoming.locked().remove(&id);
-            self.relays.incoming_video.locked().remove(&id);
+            self.relays.incoming.locked().remove(&(via, id));
+            self.relays.incoming_video.locked().remove(&(via, id));
             if let (Some(video), None) = (self.video.as_mut(), link_to(&from)) {
                 video.unlink(&from);
             }
@@ -340,7 +340,7 @@ impl Active {
             let Some(via) = conference::forwarder(&from, &conference.hearing, None) else { continue };
             let Some(link) = link_to(&via) else { continue };
             let mut incoming = self.relays.incoming.locked();
-            let id = (0..=u8::MAX).map(|n| conference.next_id.wrapping_add(n)).find(|id| !incoming.contains_key(id)).unwrap_or(0);
+            let id = (0..=u8::MAX).map(|n| conference.next_id.wrapping_add(n)).find(|id| !incoming.keys().any(|(_, taken)| taken == id)).unwrap_or(0);
             conference.next_id = id.wrapping_add(1);
             let (opus_tx, mut opus_rx) = mpsc::unbounded_channel::<Vec<u8>>();
             let (speaker, talking) = (self.audio.speaker(), self.talking.clone());
@@ -355,7 +355,7 @@ impl Active {
                     }
                 }
             });
-            incoming.insert(id, opus_tx);
+            incoming.insert((via, id), opus_tx);
             conference.heard_through.insert(from, (via, id));
             let _ = link.commands.send(CallCommand::Signal(CallSignal::Forward { from, id, on: true }));
         }
@@ -367,7 +367,7 @@ impl Active {
                 }
                 let (display, small, stats) = video.relayed(from);
                 let (to_show, mut back) = call::show_relayed(display, small, stats);
-                self.relays.incoming_video.locked().insert(id, to_show);
+                self.relays.incoming_video.locked().insert((via, id), to_show);
                 let commands = link.commands.clone();
                 tokio::spawn(async move {
                     while let Some(signal) = back.recv().await {
@@ -411,9 +411,15 @@ impl Active {
         to.budget.relayed.store(count, std::sync::atomic::Ordering::Relaxed);
         drop(outgoing);
         let mut video_out = self.relays.outgoing_video.locked();
+        let from_link = self.links.iter().find(|l| l.key == from);
+        // Only for someone we're linked to: any other key asked of us
+        // makes no entry.
+        if from_link.is_none() {
+            video_out.remove(&from);
+            return;
+        }
         let list = video_out.entry(from).or_default();
         list.retain(|p| p.to != to.key);
-        let from_link = self.links.iter().find(|l| l.key == from);
         if let (true, Some(from_link)) = (on && from != to.key && !to.budget.covered.load(std::sync::atomic::Ordering::Relaxed), from_link) {
             let from_stats = self.video.as_ref().and_then(|v| v.remote(&from)).map(|r| r.stats.clone());
             list.push(PassingOn { to: to.key, id, to_link: to.commands.clone(), from_link: from_link.commands.clone(), from_stats, shown_in: ((0, 0), (0, 0)), no_h265: false });
@@ -578,17 +584,24 @@ impl Rate {
     }
 }
 
+/// Where what's passed on to us goes, by the link it comes on and the id
+/// that link was given (see `Relays`).
+type ByLinkAndId<T> = Arc<std::sync::Mutex<std::collections::HashMap<([u8; 32], u8), mpsc::UnboundedSender<T>>>>;
+
 /// In a conference, voices passed on: others' to us, through a member who
 /// hears them, and ours of those we hear, to members who can't.
 #[derive(Default)]
 struct Relays {
-    /// Passed on to us: where each id's frames are decoded.
-    incoming: Arc<std::sync::Mutex<std::collections::HashMap<u8, mpsc::UnboundedSender<Vec<u8>>>>>,
+    /// Passed on to us: where each id's frames are decoded, by the link
+    /// asked to pass them on and the id it was given — what comes on any
+    /// other link with that id isn't theirs, and goes nowhere.
+    incoming: ByLinkAndId<Vec<u8>>,
     /// Passed on by us: for each member we hear, whom to.
     outgoing: Arc<std::sync::Mutex<std::collections::HashMap<[u8; 32], Vec<Forwarding>>>>,
     /// Pictures passed on to us: where each id's go to be shown (see
     /// `call::show_relayed`).
-    incoming_video: Arc<std::sync::Mutex<std::collections::HashMap<u8, mpsc::UnboundedSender<CallSignal>>>>,
+    /// By link and id, as `incoming`.
+    incoming_video: ByLinkAndId<CallSignal>,
     /// Pictures passed on by us: for each member we see, whom to.
     outgoing_video: Arc<std::sync::Mutex<std::collections::HashMap<[u8; 32], Vec<PassingOn>>>>,
 }
@@ -2276,7 +2289,7 @@ impl Calls {
             while let Some((id, signal)) = vias_rx.recv().await {
                 match signal {
                     CallSignal::Video(_) | CallSignal::CameraOff | CallSignal::Screen(_) => {
-                        let to_show = incoming_video.locked().get(&id).cloned();
+                        let to_show = incoming_video.locked().get(&(key, id)).cloned();
                         match to_show {
                             Some(to_show) => {
                                 let _ = to_show.send(signal);
@@ -2310,7 +2323,7 @@ impl Calls {
         let incoming = active.relays.incoming.clone();
         tokio::spawn(async move {
             while let Some((id, opus)) = relayed_rx.recv().await {
-                let decoder = incoming.locked().get(&id).cloned();
+                let decoder = incoming.locked().get(&(key, id)).cloned();
                 if let Some(decoder) = decoder {
                     let _ = decoder.send(opus);
                 }

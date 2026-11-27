@@ -80,6 +80,8 @@ struct Shared {
     ended: Mutex<Option<String>>,
     /// The desktop's allowed it: what's sent from now on is done.
     ready: AtomicBool,
+    /// Control's been stopped here: nothing still queued is done.
+    stopped: AtomicBool,
 }
 
 impl Shared {
@@ -182,6 +184,7 @@ impl Injector for WaylandInjector {
 
 impl Drop for WaylandInjector {
     fn drop(&mut self) {
+        self.shared.stopped.store(true, Ordering::Relaxed);
         self.tx = None;
         let pid = self.shared.asking.swap(0, Ordering::Relaxed);
         if pid != 0 {
@@ -216,6 +219,9 @@ fn run(shared: &Arc<Shared>, place: &Place, mut rx: mpsc::UnboundedReceiver<Do>)
     shared.ready.store(true, Ordering::Relaxed);
     let mut keys = Keys::default();
     while let Some(what) = rx.blocking_recv() {
+        if shared.stopped.load(Ordering::Relaxed) {
+            break;
+        }
         for line in keys.lines(what) {
             if helper.say(&line).is_err() {
                 return Ok("the portal helper ended".to_string());

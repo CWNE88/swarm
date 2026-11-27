@@ -378,6 +378,8 @@ Leave…, in its details (l in the TUI, /leave in it), asks first. The group goe
 ## How groups work
 Each person in a group passes new messages on to the others in it they are connected to. Every message is signed by whoever wrote it, so it doesn't matter who passes it on. Catch up (or r) fetches anything you missed from whoever in the group is reachable.
 
+Times in a group come from each person's own clock, so they're kept in check: a message or change dated ahead of your clock (someone's clock is fast) is kept, but can't push anything out: a change counts as made now, and once a group holds its most messages, those dated ahead are the first to go; a timer someone sets deletes nothing you already had before it reached you, and someone added sees nothing from before whoever added them was in it. A device keeps at most 1000 groups, and one you were told you'd been added to but never caught up on goes after a day.
+
 A line in a group that names you (your name as a word of its own, "Owen, lunch?" or "@owen") is faintly highlighted, and while one is unread the group shows @ beside its name. A muted group (`/mute`) shows "muted" there instead, and makes no sound or notification except for a line that names you.
 
 ## Commands typed in a group

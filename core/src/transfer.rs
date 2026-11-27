@@ -358,7 +358,9 @@ pub fn sanitise_name(offered: &str) -> String {
     const FORBIDDEN: &[char] = &['/', '\\', ':', '*', '?', '"', '<', '>', '|'];
     let last = offered.rsplit(['/', '\\']).next().unwrap_or("");
     let mut name: String = last.chars().map(|c| if !crate::text::is_single_line(c.encode_utf8(&mut [0; 4])) || FORBIDDEN.contains(&c) { '_' } else { c }).collect();
-    name = name.trim_start_matches('.').trim_end_matches(['.', ' ']).trim().to_string();
+    // Dots and spaces together: " .bashrc" is still a hidden file once
+    // trimmed.
+    name = name.trim_start_matches(|c: char| c == '.' || c.is_whitespace()).trim_end_matches(['.', ' ']).trim().to_string();
     let stem = name.split('.').next().unwrap_or("").trim_end().to_ascii_uppercase();
     const RESERVED: &[&str] = &["CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"];
     if RESERVED.contains(&stem.as_str()) {
@@ -586,6 +588,8 @@ mod tests {
         assert_eq!(sanitise_name("../../etc/passwd"), "passwd");
         assert_eq!(sanitise_name("C:\\Windows\\evil.exe"), "evil.exe");
         assert_eq!(sanitise_name(".bashrc"), "bashrc");
+        assert_eq!(sanitise_name(" .bashrc"), "bashrc");
+        assert_eq!(sanitise_name(" . .profile"), "profile");
         assert_eq!(sanitise_name(".."), "file");
         assert_eq!(sanitise_name("a\nb\tc.txt"), "a_b_c.txt");
         assert_eq!(sanitise_name("what?.txt"), "what_.txt");

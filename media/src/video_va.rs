@@ -1289,10 +1289,20 @@ impl VaDecoder {
         for nal in nal_units(frame) {
             match nal.first().map(|b| b & 0x1f) {
                 Some(7) => {
+                    // After a slice, it would change what that slice was
+                    // read with: encoders send them first.
+                    if !slices.is_empty() {
+                        bail!("a parameter set after a slice in the same frame");
+                    }
                     let sps = Sps::parse(nal).ok_or_else(|| anyhow!("an SPS it can't take (scaling lists?)"))?;
                     self.spss.insert(sps.id, sps);
                 }
                 Some(8) => {
+                    // After a slice, it would change what that slice was
+                    // read with: encoders send them first.
+                    if !slices.is_empty() {
+                        bail!("a parameter set after a slice in the same frame");
+                    }
                     let pps = Pps::parse(nal).ok_or_else(|| anyhow!("a PPS it can't take (slice groups or scaling lists?)"))?;
                     self.ppss.insert(pps.id, pps);
                 }
@@ -1498,10 +1508,20 @@ impl HevcDecoder {
         for nal in nal_units(frame) {
             match h265::nal_type(nal) {
                 Some(h265::SPS) => {
+                    // After a slice, it would change what that slice was
+                    // read with: encoders send them first.
+                    if !slices.is_empty() {
+                        bail!("a parameter set after a slice in the same frame");
+                    }
                     let sps = h265::Sps::parse(nal).ok_or_else(|| anyhow!("an SPS it can't take (scaling lists, or long-term pictures?)"))?;
                     self.spss.insert(sps.id, sps);
                 }
                 Some(h265::PPS) => {
+                    // After a slice, it would change what that slice was
+                    // read with: encoders send them first.
+                    if !slices.is_empty() {
+                        bail!("a parameter set after a slice in the same frame");
+                    }
                     let pps = h265::Pps::parse(nal).ok_or_else(|| anyhow!("a PPS it can't take (scaling lists?)"))?;
                     self.ppss.insert(pps.id, pps);
                 }
@@ -1554,6 +1574,10 @@ impl HevcDecoder {
                     }
                 }
             }
+        }
+        // The VA picture has room for 15 (`ReferenceFrames`).
+        if kept.len() > 15 {
+            bail!("picture {poc} keeps {} references, more than 15", kept.len());
         }
         self.kept = kept;
         let session = self.session.as_ref().unwrap();
@@ -1610,6 +1634,9 @@ impl HevcDecoder {
         pic.pps_cr_qp_offset = pps.cr_qp_offset as i8;
         pic.log2_parallel_merge_level_minus2 = pps.log2_parallel_merge_level_minus2 as u8;
         if let Some(tiles) = &tiles {
+            if !tiles.fit(&sps) {
+                bail!("tiles that don't fit the picture");
+            }
             pic.num_tile_columns_minus1 = tiles.columns_minus1 as u8;
             pic.num_tile_rows_minus1 = tiles.rows_minus1 as u8;
             let (columns, rows) = tiles.sizes_minus1(&sps);

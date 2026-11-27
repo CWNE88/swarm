@@ -368,6 +368,15 @@ impl ChannelWork {
                     if !about_me || channel::validate_name(&channel.name).is_err() || !channel::verify_roster_event(&channel, &event) {
                         return Ok(());
                     }
+                    // However many a contact adds us to, only so many are
+                    // kept, and only a few not caught up on yet (which
+                    // aren't listed, so nobody would see them pile up).
+                    let known = channel::known_channels(&dir).unwrap_or_default();
+                    let waiting = known.iter().filter(|c| !self.ctx.roster_of(c).ever_in(&me)).count();
+                    if known.len() >= channel::MOST_GROUPS || waiting >= channel::MOST_WAITING_GROUPS {
+                        log!(self.ctx, "added to a group: not kept, as there are {} already ({waiting} not caught up on)", known.len());
+                        return Ok(());
+                    }
                     log!(self.ctx, "added to a group: catching up on it");
                 }
                 let new = channel::merge_roster(&dir, &channel, std::slice::from_ref(&event)).unwrap_or_default();

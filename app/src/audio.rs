@@ -255,6 +255,11 @@ fn open(mic_tx: mpsc::UnboundedSender<Vec<f32>>, speaker_rx: Option<mpsc::Unboun
         let mut seen = crate::audio_devices::changes();
         while !thread_stop.load(Ordering::SeqCst) {
             std::thread::sleep(std::time::Duration::from_millis(50));
+            // With no speaker playing, nothing takes the voices in: they're
+            // let go here instead of piling up for the whole call.
+            if let (Some(side), false) = (&speaker_side, matches!(output, Some(Ok(_)))) {
+                swarm_core::lock::Locked::locked(&**side).mixer.discard();
+            }
             if crate::audio_devices::changes() == seen {
                 continue;
             }
@@ -778,6 +783,17 @@ impl Mixer {
         self.voices.retain(|v| !(v.ended && (v.playout.held.is_empty() || v.playout.priming)));
     }
 
+    /// Takes in whatever's arrived and lets it go unplayed: for when
+    /// there's no speaker to play it.
+    fn discard(&mut self) {
+        self.take_in();
+        for voice in &mut self.voices {
+            voice.playout.held.clear();
+            voice.playout.priming = true;
+        }
+        self.voices.retain(|v| !v.ended);
+    }
+
     /// The next sample: every voice's, added together.
     fn pop(&mut self) -> f32 {
         self.voices.iter_mut().map(|v| v.playout.pop().unwrap_or(0.0)).sum::<f32>().clamp(-1.0, 1.0)
@@ -916,6 +932,26 @@ mod tests {
             }
         }
         assert!(playout.held.len() <= PREBUFFER_SAMPLES + FRAME_SAMPLES, "{} samples still held", playout.held.len());
+    }
+
+    /// With no speaker, what's heard is let go as it comes, not kept for
+    /// the whole call; a voice that's ended goes with it.
+    #[test]
+    fn with_no_speaker_voices_are_let_go() {
+        let (sources, added) = std::sync::mpsc::channel();
+        let mut mixer = Mixer::new(added);
+        let (a, a_rx) = mpsc::unbounded_channel();
+        let (b, b_rx) = mpsc::unbounded_channel();
+        sources.send(a_rx).unwrap();
+        sources.send(b_rx).unwrap();
+        for _ in 0..50 {
+            a.send(vec![0.25f32; FRAME_SAMPLES]).unwrap();
+            b.send(vec![0.5f32; FRAME_SAMPLES]).unwrap();
+        }
+        drop(b);
+        mixer.discard();
+        assert_eq!(mixer.voices.len(), 1, "the ended voice is gone");
+        assert!(mixer.voices[0].playout.held.is_empty() && mixer.voices[0].from.is_empty(), "nothing's left waiting");
     }
 
     /// Two voices at once are both heard; one that's ended is let go

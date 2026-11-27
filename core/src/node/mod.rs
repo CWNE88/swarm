@@ -1903,6 +1903,8 @@ async fn sweep_expired(ctx: Arc<Ctx>) {
         let _ = crate::waiting::sweep(&ctx.paths.waiting(), now);
         let _ = crate::unsaying::sweep(&ctx.paths.unsaying(), now);
         let _ = crate::posts::sweep_deletions(&ctx.paths.posts(), now);
+        // Told we'd been added to a group, and never caught up on it.
+        let _ = crate::channel::drop_waiting(&ctx.paths.channels(), &devices::me(&ctx), Duration::from_secs(24 * 3600));
         let gone = crate::history::sweep(&ctx.paths.history(), now).unwrap_or(0)
             + crate::outbox::sweep(&ctx.paths.outbox(), now).unwrap_or(0)
             + crate::channel::sweep(&ctx.paths.channels(), now).unwrap_or(0);
