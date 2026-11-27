@@ -5,6 +5,11 @@
 use std::ops::Range;
 use std::sync::OnceLock;
 
+/// A character that shows as nothing: no part of a link shown.
+fn is_unseen(c: char) -> bool {
+    matches!(c, '\u{00AD}' | '\u{034F}' | '\u{061C}' | '\u{115F}' | '\u{1160}' | '\u{17B4}' | '\u{17B5}' | '\u{180B}'..='\u{180F}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{206F}' | '\u{3164}' | '\u{FE00}'..='\u{FE0F}' | '\u{FEFF}' | '\u{FFA0}')
+}
+
 /// Where each web address in `text` is, in order: from `http://` or
 /// `https://` (any case, not inside a word) to the next space, less the
 /// punctuation a sentence puts after one (`see https://x.org/a.`) and a
@@ -26,7 +31,9 @@ pub fn find(text: &str) -> Vec<Range<usize>> {
         if text[..at].chars().next_back().is_some_and(|c| c.is_alphanumeric()) {
             continue;
         }
-        let mut end = text[at..].find(|c: char| c.is_whitespace() || c.is_control() || matches!(c, '<' | '>' | '"' | '`')).map_or(text.len(), |i| at + i);
+        // Ended by anything unseen too (a zero-width space, a soft hyphen,
+        // a direction mark), so what's shown is all of where it goes.
+        let mut end = text[at..].find(|c: char| c.is_whitespace() || c.is_control() || is_unseen(c) || matches!(c, '<' | '>' | '"' | '`')).map_or(text.len(), |i| at + i);
         while let Some(last) = text[..end].chars().next_back() {
             let unopened = |open: char, close: char| last == close && text[at..end].matches(close).count() > text[at..end].matches(open).count();
             if matches!(last, '.' | ',' | ';' | ':' | '!' | '?' | '\'' | '*' | '_') || unopened('(', ')') || unopened('[', ']') || unopened('{', '}') {
@@ -178,6 +185,10 @@ mod tests {
         assert_eq!(links("HTTPS://X.ORG, and http://y.org?q=1&r=2!"), ["HTTPS://X.ORG", "http://y.org?q=1&r=2"]);
         assert_eq!(links("one\nhttps://a.org/\ntwo <https://b.org>"), ["https://a.org/", "https://b.org"]);
         assert_eq!(links("https://café.fr/ü"), ["https://café.fr/ü"]);
+        // Something unseen ends it: what's shown is all of where it goes.
+        assert_eq!(links("https://bank.example\u{200B}.evil.org/login"), ["https://bank.example"]);
+        assert_eq!(links("https://a.org/x\u{00AD}y"), ["https://a.org/x"]);
+        assert_eq!(links("https://a.org/\u{2066}b"), ["https://a.org/"]);
     }
 
     #[test]

@@ -44,6 +44,7 @@ pub mod secure;
 pub mod seen;
 pub mod settings;
 pub mod store;
+pub mod streamcheck;
 pub mod tally;
 pub mod text;
 pub mod transfer;

@@ -373,7 +373,14 @@ impl Sps {
             && sps.height <= MOST_SIDE
             && u64::from(sps.width) * u64::from(sps.height) <= MOST_PIXELS
             && sps.conformance.iter().all(|&c| c <= MOST_SIDE);
-        (within && sps.id <= 15 && sps.shown().is_some()).then_some(sps)
+        // Block sizes within the standard's (7.4.3.2.1): handed to the
+        // graphics driver in a byte each.
+        let blocks = sps.log2_min_tb_minus2 <= 3
+            && sps.log2_diff_max_min_tb <= 3
+            && sps.max_transform_hierarchy_depth_inter <= 4
+            && sps.max_transform_hierarchy_depth_intra <= 4
+            && sps.pcm.as_ref().is_none_or(|pcm| pcm.log2_min_minus3 <= 2 && pcm.log2_diff_max_min <= 2);
+        (within && blocks && sps.id <= 15 && sps.shown().is_some()).then_some(sps)
     }
 
     /// The coding tree blocks' size, as a power of 2.
@@ -665,7 +672,15 @@ impl Pps {
         pps.lists_modification_present = bits.flag()?;
         pps.log2_parallel_merge_level_minus2 = bits.ue()?;
         pps.slice_header_extension_present = bits.flag()?;
-        (pps.id <= 63 && pps.sps_id <= 15).then_some(pps)
+        // Within the standard's ranges (7.4.3.3), as the SPS's are.
+        let within = (-26..=25).contains(&pps.init_qp_minus26)
+            && pps.diff_cu_qp_delta_depth <= 3
+            && (-12..=12).contains(&pps.cb_qp_offset)
+            && (-12..=12).contains(&pps.cr_qp_offset)
+            && (-6..=6).contains(&pps.beta_offset_div2)
+            && (-6..=6).contains(&pps.tc_offset_div2)
+            && pps.log2_parallel_merge_level_minus2 <= 4;
+        (within && pps.id <= 63 && pps.sps_id <= 15).then_some(pps)
     }
 
     /// As a PPS NAL unit, without a start code.
@@ -995,7 +1010,15 @@ impl SliceHeader {
             }
         }
         slice.header_bytes = bits.at() / 8;
-        Some(slice)
+        // Within the standard's ranges (7.4.7.1), as the PPS's are.
+        let qp = 26 + pps.init_qp_minus26 + slice.qp_delta;
+        let within = (0..=51).contains(&qp)
+            && slice.five_minus_max_num_merge_cand <= 4
+            && (-12..=12).contains(&slice.cb_qp_offset)
+            && (-12..=12).contains(&slice.cr_qp_offset)
+            && (-6..=6).contains(&slice.beta_offset_div2)
+            && (-6..=6).contains(&slice.tc_offset_div2);
+        within.then_some(slice)
     }
 
     /// The bytes from `nal`'s start to the slice's data, as `nal` has
@@ -1172,6 +1195,22 @@ mod tests {
         }
     }
 
+    /// As H.264's (see `h264`'s test): the look before any decoder reads
+    /// an SPS's size and pictures held as this parser does, and stops
+    /// only frames asking for more than any stream needs.
+    #[test]
+    fn frames_asking_too_much_are_stopped_before_any_decoder() {
+        use swarm_core::streamcheck::within_limits;
+        let frame = |nal: Vec<u8>| [&[0, 0, 0, 1][..], &nal].concat();
+        for fine in [sps(), Sps { width: 7680, height: 4320, max_dec_pic_buffering_minus1: 15, ..sps() }] {
+            assert!(Sps::parse(&fine.write()).is_some());
+            assert!(within_limits(&frame(fine.write()), true), "{fine:?}");
+        }
+        for wrong in [Sps { width: 16_000, height: 16_000, ..sps() }, Sps { max_dec_pic_buffering_minus1: 40, ..sps() }] {
+            assert!(!within_limits(&frame(wrong.write()), true), "{wrong:?}");
+        }
+    }
+
     fn sps() -> Sps {
         Sps {
             ptl: Ptl::main(120),
@@ -1229,6 +1268,20 @@ mod tests {
             ..Pps::default()
         };
         assert_eq!(Pps::parse(&pps.write()), Some(pps.clone()));
+        // Past the standard's ranges, which the graphics driver gets in a
+        // byte: not taken.
+        for wrong in [
+            Pps { init_qp_minus26: 26, ..pps.clone() },
+            Pps { cb_qp_offset: 13, ..pps.clone() },
+            Pps { cr_qp_offset: -300, ..pps.clone() },
+            Pps { beta_offset_div2: 7, ..pps.clone() },
+            Pps { log2_parallel_merge_level_minus2: 5, ..pps.clone() },
+        ] {
+            assert_eq!(Pps::parse(&wrong.write()), None, "{wrong:?}");
+        }
+        for wrong in [Sps { log2_min_tb_minus2: 4, ..sps.clone() }, Sps { max_transform_hierarchy_depth_intra: 200, ..sps.clone() }] {
+            assert_eq!(Sps::parse(&wrong.write()), None, "{wrong:?}");
+        }
         let tiles = pps.tiles.unwrap();
         assert_eq!(tiles.sizes_minus1(&sps), (vec![9, 9, 9], vec![7, 8]));
         let uniform = Tiles { columns_minus1: 3, rows_minus1: 0, ..Tiles::default() };

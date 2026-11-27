@@ -200,6 +200,10 @@ pub const MOST_MBS: u32 = 139_264;
 /// MaxDpbFrames): each is a surface held.
 const MOST_REFERENCES: u32 = 16;
 
+/// The most reference markings one slice may carry: a few for each
+/// picture that could be kept, and an end.
+const MOST_MARKINGS: usize = 66;
+
 /// A sequence parameter set.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Sps {
@@ -437,7 +441,13 @@ impl Pps {
             }
             pps.second_chroma_qp_index_offset = bits.se()?;
         }
-        (pps.id <= 255 && pps.sps_id <= 31).then_some(pps)
+        // Within the standard's ranges (7.4.2.2): they're handed to the
+        // graphics driver in a byte, past which they'd wrap.
+        let within = (-26..=25).contains(&pps.pic_init_qp_minus26)
+            && (-26..=25).contains(&pps.pic_init_qs_minus26)
+            && (-12..=12).contains(&pps.chroma_qp_index_offset)
+            && (-12..=12).contains(&pps.second_chroma_qp_index_offset);
+        (within && pps.id <= 255 && pps.sps_id <= 31).then_some(pps)
     }
 
     /// As a PPS NAL unit, without a start code.
@@ -550,6 +560,9 @@ impl SliceHeader {
                 loop {
                     match bits.ue()? {
                         3 => break,
+                        // No more than the list has entries (7.4.3.1):
+                        // each is a few bits read, and more kept.
+                        _ if slice.modifications.len() > slice.num_ref_idx_l0_active_minus1 as usize => return None,
                         idc @ (0 | 1) => slice.modifications.push((idc, bits.ue()?)),
                         _ => return None,
                     }
@@ -568,6 +581,9 @@ impl SliceHeader {
                     loop {
                         match bits.ue()? {
                             0 => break,
+                            // As many as a stream could ever need (7.4.3.3
+                            // bounds them by the pictures kept).
+                            _ if slice.mmco.len() >= MOST_MARKINGS => return None,
                             1 => slice.mmco.push((1, bits.ue()?)),
                             5 => slice.mmco.push((5, 0)),
                             _ => return None,
@@ -588,7 +604,15 @@ impl SliceHeader {
             }
         }
         slice.header_bits = bits.at();
-        Some(slice)
+        // Within the standard's ranges (7.4.3), as the PPS's are.
+        let qp = 26 + pps.pic_init_qp_minus26 + slice.slice_qp_delta;
+        let within = (0..=51).contains(&qp)
+            && slice.cabac_init_idc <= 2
+            && slice.disable_deblocking_filter_idc <= 2
+            && (-6..=6).contains(&slice.slice_alpha_c0_offset_div2)
+            && (-6..=6).contains(&slice.slice_beta_offset_div2)
+            && slice.header_bits <= usize::from(u16::MAX);
+        within.then_some(slice)
     }
 
     /// As the start of a slice's NAL unit (without a start code), for a
@@ -723,7 +747,17 @@ mod tests {
         let pps = Pps { pic_init_qp_minus26: -3, deblocking_filter_control_present_flag: true, chroma_qp_index_offset: 2, second_chroma_qp_index_offset: 2, ..Pps::default() };
         assert_eq!(Pps::parse(&pps.write()), Some(pps.clone()));
         let pps = Pps { transform_8x8_mode_flag: true, second_chroma_qp_index_offset: -1, entropy_coding_mode_flag: true, ..pps };
-        assert_eq!(Pps::parse(&pps.write()), Some(pps));
+        assert_eq!(Pps::parse(&pps.write()), Some(pps.clone()));
+        // Past the standard's ranges, which the graphics driver gets in a
+        // byte: not taken.
+        for wrong in [
+            Pps { pic_init_qp_minus26: 26, ..pps.clone() },
+            Pps { pic_init_qs_minus26: -27, ..pps.clone() },
+            Pps { chroma_qp_index_offset: 13, second_chroma_qp_index_offset: 13, ..pps.clone() },
+            Pps { second_chroma_qp_index_offset: -200, ..pps.clone() },
+        ] {
+            assert_eq!(Pps::parse(&wrong.write()), None, "{wrong:?}");
+        }
         for wrong in [
             Sps { log2_max_frame_num_minus4: 13, ..sps.clone() },
             Sps { log2_max_pic_order_cnt_lsb_minus4: 13, ..sps.clone() },
@@ -739,6 +773,77 @@ mod tests {
         ] {
             assert_eq!(Sps::parse(&wrong.write()), None, "{wrong:?}");
         }
+    }
+
+    /// The look every received frame gets before any decoder
+    /// (`swarm_core::streamcheck`) reads an SPS's size and references as
+    /// this parser does — scaling lists too, which this one doesn't take —
+    /// and stops only frames asking for more than any stream needs.
+    #[test]
+    fn frames_asking_too_much_are_stopped_before_any_decoder() {
+        use swarm_core::streamcheck::within_limits;
+        let frame = |nal: Vec<u8>| [&[0, 0, 0, 1][..], &nal, &[0, 0, 1, 0x65, 0x88]].concat();
+        let sps = Sps {
+            profile_idc: 100,
+            chroma_format_idc: 1,
+            log2_max_frame_num_minus4: 4,
+            log2_max_pic_order_cnt_lsb_minus4: 4,
+            max_num_ref_frames: 4,
+            width_in_mbs: 240,
+            height_in_map_units: 135,
+            frame_mbs_only_flag: true,
+            direct_8x8_inference_flag: true,
+            ..Sps::default()
+        };
+        for fine in [
+            sps.clone(),
+            Sps { profile_idc: 66, ..sps.clone() },
+            Sps { pic_order_cnt_type: 1, offset_for_ref_frame: vec![1, -2, 3], ..sps.clone() },
+            Sps { frame_mbs_only_flag: false, height_in_map_units: 68, ..sps.clone() },
+            Sps { max_num_ref_frames: 16, width_in_mbs: 512, height_in_map_units: 272, ..sps.clone() },
+        ] {
+            assert!(within_limits(&frame(fine.write()), false), "{fine:?}");
+        }
+        for wrong in [Sps { width_in_mbs: 1000, height_in_map_units: 1000, ..sps.clone() }, Sps { max_num_ref_frames: 17, ..sps.clone() }, Sps { max_num_ref_frames: 1 << 20, ..sps.clone() }] {
+            assert!(!within_limits(&frame(wrong.write()), false), "{wrong:?}");
+        }
+        // With scaling lists (which some encoders send): read past, not
+        // refused for having them.
+        let scaled = |references: u32| {
+            let mut w = BitWriter::default();
+            w.put(8, 100);
+            w.put(8, 0);
+            w.put(8, 40);
+            w.ue(0);
+            w.ue(1);
+            w.ue(0);
+            w.ue(0);
+            w.flag(false);
+            w.flag(true);
+            for list in 0..8 {
+                w.flag(list < 2);
+                if list < 2 {
+                    for delta in [3, -1, 2, 0, 5, -3, 1, 1, 0, 0, -2, 4, 1, 0, -1, 2] {
+                        w.se(delta);
+                    }
+                }
+            }
+            w.ue(0);
+            w.ue(2);
+            w.ue(references);
+            w.flag(false);
+            w.ue(119);
+            w.ue(67);
+            w.flag(true);
+            w.flag(true);
+            w.flag(false);
+            w.flag(false);
+            frame(unit(3, 7, &w.finish()))
+        };
+        assert!(within_limits(&scaled(4), false));
+        assert!(!within_limits(&scaled(40), false));
+        // Anything else, or one cut short, is left to the decoder.
+        assert!(within_limits(&[0, 0, 1, 0x67], false) && within_limits(b"not a stream", false));
     }
 
     /// Slice headers written read back the same, ending on the bit said.
@@ -788,5 +893,19 @@ mod tests {
             assert_eq!(parsed, SliceHeader { header_bits: parsed.header_bits, ..header });
         }
         assert!(escaped > 0);
+        // Longer lists than the standard allows aren't read on and kept:
+        // each entry is a couple of bits sent, and far more held.
+        let base = SliceHeader { nal_ref_idc: 1, slice_type: SLICE_P, pps_id: 1, num_ref_idx_l0_active_minus1: 1, ..SliceHeader::default() };
+        for wrong in [
+            SliceHeader { modifications: vec![(0, 0); 3], ..base.clone() },
+            SliceHeader { modifications: vec![(0, 0); 10_000], ..base.clone() },
+            SliceHeader { adaptive_marking: true, mmco: vec![(1, 0); MOST_MARKINGS + 1], ..base.clone() },
+            // And values past the standard's ranges.
+            SliceHeader { slice_qp_delta: 40, ..base.clone() },
+            SliceHeader { slice_alpha_c0_offset_div2: 7, ..base.clone() },
+        ] {
+            let (nal, _) = wrong.write(&poc0, &deblocking);
+            assert_eq!(SliceHeader::parse(&[&nal[..], &[0xff, 0xff]].concat(), &spss, &ppss), None);
+        }
     }
 }

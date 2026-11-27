@@ -1729,8 +1729,16 @@ impl VideoDecoder {
                         decodable = false;
                     }
                 }
+                let data: Vec<u8> = if decodable { assembly.pieces.into_iter().flatten().flatten().collect() } else { Vec::new() };
+                // Asking for pictures bigger, or more of them, than any real
+                // stream does: never handed to a decoder, which would set
+                // that much memory aside as soon as it read it.
+                if decodable && !crate::streamcheck::within_limits(&data, assembly.codec == Codec::H265) {
+                    self.need_key = true;
+                    lost = true;
+                    decodable = false;
+                }
                 if decodable {
-                    let data: Vec<u8> = assembly.pieces.into_iter().flatten().flatten().collect();
                     let decoded = match &mut self.decoder {
                         Decoding::Soft(decoder) => match decoder.decode(&data) {
                             Ok(Some(yuv)) => Ok(Some(i420_of(&yuv, self.memory.bytes()))),

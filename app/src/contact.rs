@@ -99,7 +99,10 @@ pub fn parse(text: &str) -> Option<Contact> {
     for pair in query.split('&').filter(|p| !p.is_empty()) {
         match pair.split_once('=') {
             Some(("a", list)) => contact.addresses = list.split(',').map(str::trim).filter(|a| !a.is_empty()).map(String::from).collect(),
-            Some(("n", name)) => contact.name = unescape(name)?,
+            // Someone else's text: no control or direction characters
+            // (an escape a terminal would act on, or text running
+            // backwards to pass for another name).
+            Some(("n", name)) => contact.name = swarm_core::text::single_line(&unescape(name)?).trim().to_string(),
             _ => {}
         }
     }
@@ -269,6 +272,17 @@ mod tests {
         assert_eq!(back.address_text(), "2001:db8::5,203.0.113.7,192.168.1.20");
         assert!(swarm_core::peers::validate_address(&back.address_text()).is_ok(), "taken as it is");
         assert_eq!(peerbook_key(&back.key_text()), key());
+    }
+
+    /// A name in someone's code with an escape (which a terminal would act
+    /// on) or a direction character (text running backwards, to pass for
+    /// another name) comes without them.
+    #[test]
+    fn a_names_control_and_direction_characters_go() {
+        for (sent, read) in [("evil\u{1b}[2Jname", "evil [2Jname"), ("Ann\u{202e}nimda", "Ann nimda"), ("\u{2066}Bob", "Bob")] {
+            let back = parse(&line(&key(), &[], &[], sent)).expect("a contact line");
+            assert_eq!(back.name, read);
+        }
     }
 
     fn peerbook_key(text: &str) -> [u8; 32] {

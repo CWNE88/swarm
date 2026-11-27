@@ -57,6 +57,12 @@ be answered with this list.
 - Contacts, and people in a group or call with you, are trusted with
   what they're sent, and could pass it on. Someone added to a group sees
   what's said from then on.
+- A contact whose calls you've set to be answered without asking is
+  trusted with that: if they bring you into a conference call, it's
+  answered too, and the others in it hear you.
+- Someone with a copy of your disk can't read or forge anything without
+  your passphrase, but can delete files or put back older copies of
+  them, as they could wipe the disk.
 - Allowing someone to control your screen gives them control of it,
   Swarm's own settings included, until either of you stops it.
 - In a conference, who may remove whom follows the order people came in.

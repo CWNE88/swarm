@@ -357,6 +357,8 @@ pub fn validate_name(name: &str) -> Result<(), PeersError> {
         Some("a contact's name can't be empty")
     } else if name.chars().any(char::is_whitespace) {
         Some("a contact's name can't contain spaces")
+    } else if !crate::text::is_single_line(name) {
+        Some("a contact's name can't contain control or direction characters")
     } else if name.starts_with('#') {
         Some("a contact's name can't start with '#'")
     } else {
@@ -481,6 +483,17 @@ fn decode_public_key(s: &str) -> Result<[u8; 32], ()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A contact's name can't carry an escape a terminal would act on, or
+    /// a direction character turning it into another name.
+    #[test]
+    fn a_name_with_control_or_direction_characters_is_refused() {
+        assert!(validate_name("Ann").is_ok());
+        assert!(validate_name("Zoë-Ł").is_ok());
+        for wrong in ["evil\u{1b}[2J", "Ann\u{202e}nimda", "\u{2066}Bob", "a\u{7}b"] {
+            assert!(validate_name(wrong).is_err(), "{wrong:?}");
+        }
+    }
 
     /// A lookup that answers `ip` after `delay`, or fails.
     fn fake(ip: Option<&'static str>, delay: u64) -> impl Fn(String) -> std::pin::Pin<Box<dyn std::future::Future<Output = NameLookup> + Send>> + Clone + Send + 'static {
