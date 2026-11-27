@@ -509,7 +509,7 @@ pub(crate) fn run_device(action: DeviceCommand) -> Result<()> {
             let code = answer.trim_start_matches("OK ").trim_end();
             println!("{code}");
             let minutes = swarm_core::node::joining::CODE_LIFETIME.as_secs() / 60;
-            eprintln!("On the new device: swarm keygen --out ~/.swarm/identity --join '{code}'\nThe code works once, for {minutes} minutes, while Swarm runs here.");
+            eprintln!("On the new device: swarm keygen --join '{code}'\nThe code works once, for {minutes} minutes, while Swarm runs here.");
             Ok(())
         }
         DeviceCommand::Remove { device } => ask(format!("DEVICE_REMOVE\n{device}\n")),

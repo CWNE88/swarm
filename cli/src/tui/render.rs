@@ -1327,7 +1327,7 @@ pub(super) fn render_device_code(frame: &mut Frame, area: Rect, app: &App) {
     let Some((code, _, _)) = &app.device_code else { return };
     let dim = Style::default().fg(look::dim());
     let lines = vec![
-        Line::from("  On the new device: swarm keygen --out ~/.swarm/identity --join '<this line>'"),
+        Line::from("  On the new device: swarm keygen --join '<this line>'"),
         Line::from(Span::styled("  or, in Swarm's window there, Add this device to my user with it. It works once, for ten minutes,", dim)),
         Line::from(Span::styled("  while Swarm runs here. Anyone with it can add a device as you: show it to nobody else. Esc puts it away.", dim)),
         Line::from(format!("  {code}")),

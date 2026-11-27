@@ -395,8 +395,13 @@ fn taken_off(ctx: &Arc<Ctx>, who: &str) {
 fn wipe(dir: &std::path::Path) -> std::io::Result<()> {
     let dir = dir.canonicalize()?;
     let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).and_then(|h| std::path::PathBuf::from(h).canonicalize().ok());
-    if dir.parent().is_none() || home.as_ref() == Some(&dir) {
+    if dir.parent().is_none() || home.as_ref().is_some_and(|home| home.starts_with(&dir)) || shared(&dir, home.as_deref()) {
         return Err(std::io::Error::other("that folder is too wide to wipe"));
+    }
+    // A vault of swarm's (every one has its `format`), not a folder set
+    // (by SWARM_HOME, say) to somewhere else.
+    if !dir.join("format").is_file() {
+        return Err(std::io::Error::other("that isn't a swarm folder: not wiped"));
     }
     crate::store::close_vault(&dir);
     for entry in std::fs::read_dir(&dir)? {
@@ -408,6 +413,16 @@ fn wipe(dir: &std::path::Path) -> std::io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Whether `dir` is one of the places many programs keep their folders
+/// in (`~/.config` itself, say), never to be wiped whatever Swarm's
+/// folder has been set to.
+fn shared(dir: &std::path::Path, home: Option<&std::path::Path>) -> bool {
+    let under_home = [".config", ".local", ".local/share", ".local/state", "Library", "Library/Application Support", "AppData", "AppData/Local", "AppData/Roaming", "Documents", "Desktop", "Downloads"];
+    let in_home = home.into_iter().flat_map(|home| under_home.iter().map(move |rest| home.join(rest)));
+    let named = ["XDG_CONFIG_HOME", "XDG_DATA_HOME", "LOCALAPPDATA", "APPDATA"].into_iter().filter_map(std::env::var_os).map(std::path::PathBuf::from);
+    in_home.chain(named).any(|place| place.canonicalize().is_ok_and(|place| place == dir))
 }
 
 /// Entries of the list from another of the user's devices (`who`), taken
@@ -1395,4 +1410,33 @@ async fn send_list(ctx: &Ctx, conn: &mut AuthenticatedConnection, sent: &mut Vec
     }
     *sent = entries;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A removed device empties its folder, and only a folder of swarm's
+    /// own: never one without its vault's `format`, nor a shared place.
+    #[test]
+    fn only_a_swarm_folder_is_ever_wiped() {
+        let dir = std::env::temp_dir().join(format!("swarm-wipe-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("other-app")).unwrap();
+        std::fs::write(dir.join("other-app").join("settings"), "keep").unwrap();
+        assert!(wipe(&dir).is_err(), "no vault here: not swarm's");
+        assert!(dir.join("other-app").join("settings").exists(), "left as it was");
+        // A shared place, even with a vault in it.
+        let home = dir.join("home");
+        std::fs::create_dir_all(home.join(".config")).unwrap();
+        std::fs::write(home.join(".config").join("format"), "sealed").unwrap();
+        let canonical = |p: &std::path::Path| p.canonicalize().unwrap();
+        assert!(shared(&canonical(&home.join(".config")), Some(&canonical(&home))));
+        assert!(!shared(&canonical(&dir.join("other-app")), Some(&canonical(&home))));
+        std::fs::remove_dir_all(&home).unwrap();
+        std::fs::write(dir.join("format"), "sealed").unwrap();
+        wipe(&dir).unwrap();
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "swarm's own: emptied");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }

@@ -113,7 +113,8 @@ pub(crate) fn keygen(out: Option<PathBuf>, restore: bool, join: Option<String>) 
 
 /// Adds this device to your user with `code` (see `keygen --join`).
 pub(crate) fn keygen_joining(out: Option<PathBuf>, code: &str) -> Result<()> {
-    let Some(path) = out else { anyhow::bail!("--join needs --out: where to keep your identity on this device") };
+    // Kept in Swarm's folder unless said otherwise.
+    let path = out.unwrap_or_else(|| swarm_app::paths::data_dir().join("identity"));
     let path = expand_home(&path);
     if path.exists() {
         anyhow::bail!("there's an identity at {} already — it isn't replaced; move it away first if you really mean to", path.display());

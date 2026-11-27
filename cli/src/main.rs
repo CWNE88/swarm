@@ -50,7 +50,7 @@ prints the whole manual.
 EXAMPLES:
     Make your identity, once on each device (or open the window and
     follow it):
-        swarm keygen --out ~/.swarm/identity
+        swarm keygen --out ~/.config/swarm/identity
 
     Your key, to give to the people who'll add you:
         swarm pubkey
@@ -67,7 +67,10 @@ EXAMPLES:
         swarm ping bob
         swarm send bob \"are you around?\"
 
-Everything is kept under ~/.swarm, locked with your passphrase. Every
+Everything is kept in Swarm's folder, locked with your passphrase:
+~/.config/swarm on Linux, AppData\\Local\\Swarm on Windows,
+~/Library/Application Support/Swarm on a Mac, or ~/.swarm if that's
+where it already is (SWARM_HOME, if set, says where instead). Every
 command reads the passphrase from its standard input when it isn't
 typed. swarm listens on port 1977 unless `listen --port` says otherwise;
 a contact on another port gives their address as `[address]:port`."
@@ -113,13 +116,13 @@ enum Command {
         restore: bool,
         /// Add this device to your user with a code from one of your
         /// devices (`swarm device add` there), instead of making a new
-        /// user. Needs --out
+        /// user. Saved in Swarm's folder unless --out says where
         #[arg(long, conflicts_with = "restore")]
         join: Option<String>,
     },
     /// Show your identity's 12 recovery words
     Words {
-        #[arg(long, default_value = "~/.swarm/identity")]
+        #[arg(long, default_value_os_t = swarm_app::paths::data_dir().join("identity"))]
         identity: PathBuf,
     },
     /// Unlock a `swarm listen` that's waiting for its passphrase (one
@@ -128,14 +131,14 @@ enum Command {
     /// Change your passphrase; with --forgotten, set a new one from your
     /// 12 recovery words instead of the old one
     Passphrase {
-        #[arg(long, default_value = "~/.swarm/identity")]
+        #[arg(long, default_value_os_t = swarm_app::paths::data_dir().join("identity"))]
         identity: PathBuf,
         #[arg(long)]
         forgotten: bool,
     },
     /// Print your public key (your Swarm ID)
     Pubkey {
-        #[arg(long, default_value = "~/.swarm/identity")]
+        #[arg(long, default_value_os_t = swarm_app::paths::data_dir().join("identity"))]
         identity: PathBuf,
     },
     /// Set the name your contacts see beside your key. Only a label: your
@@ -143,7 +146,7 @@ enum Command {
     /// with no name to print your current one.
     Name {
         name: Option<String>,
-        #[arg(long, default_value = "~/.swarm/identity")]
+        #[arg(long, default_value_os_t = swarm_app::paths::data_dir().join("identity"))]
         identity: PathBuf,
     },
     /// Your status: a few words beside your name, for your contacts only.
@@ -153,7 +156,7 @@ enum Command {
         /// Clear it.
         #[arg(long, conflicts_with = "text")]
         clear: bool,
-        #[arg(long, default_value = "~/.swarm/identity")]
+        #[arg(long, default_value_os_t = swarm_app::paths::data_dir().join("identity"))]
         identity: PathBuf,
     },
     /// Your manually set IP address: where you can be reached that no
@@ -206,7 +209,7 @@ enum Command {
         /// Remove it.
         #[arg(long, conflicts_with = "file")]
         remove: bool,
-        #[arg(long, default_value = "~/.swarm/identity")]
+        #[arg(long, default_value_os_t = swarm_app::paths::data_dir().join("identity"))]
         identity: PathBuf,
     },
     /// Add, change and list your contacts
@@ -219,9 +222,9 @@ enum Command {
     /// and print what happens. For a device left running on its own.
     Listen {
         /// Your identity file (see `keygen --out`)
-        #[arg(long, default_value = "~/.swarm/identity")]
+        #[arg(long, default_value_os_t = swarm_app::paths::data_dir().join("identity"))]
         identity: PathBuf,
-        #[arg(long, default_value = "~/.swarm/peers")]
+        #[arg(long, default_value_os_t = swarm_app::paths::data_dir().join("peers"))]
         contacts: PathBuf,
         /// Listen on this port instead of 1977. A port below 1024 (443,
         /// say, to look like ordinary web traffic) needs running as root,
@@ -242,10 +245,10 @@ enum Command {
     Ping {
         /// A contact: their name, or their key
         contact: String,
-        #[arg(long, default_value = "~/.swarm/peers")]
+        #[arg(long, default_value_os_t = swarm_app::paths::data_dir().join("peers"))]
         contacts: PathBuf,
         /// Your identity file (see `keygen --out`)
-        #[arg(long, default_value = "~/.swarm/identity")]
+        #[arg(long, default_value_os_t = swarm_app::paths::data_dir().join("identity"))]
         identity: PathBuf,
     },
     /// Send a contact a message, and wait until it's delivered
@@ -254,10 +257,10 @@ enum Command {
         contact: String,
         /// The message: in quotes if it's more than one word
         message: String,
-        #[arg(long, default_value = "~/.swarm/peers")]
+        #[arg(long, default_value_os_t = swarm_app::paths::data_dir().join("peers"))]
         contacts: PathBuf,
         /// Your identity file (see `keygen --out`)
-        #[arg(long, default_value = "~/.swarm/identity")]
+        #[arg(long, default_value_os_t = swarm_app::paths::data_dir().join("identity"))]
         identity: PathBuf,
     },
     /// Write a post. Posts are fetched by whoever wants to read them,
@@ -269,10 +272,10 @@ enum Command {
         /// Let anyone who connects see it, not only your contacts
         #[arg(long)]
         public: bool,
-        #[arg(long, default_value = "~/.swarm/posts")]
+        #[arg(long, default_value_os_t = swarm_app::paths::data_dir().join("posts"))]
         out: PathBuf,
         /// Your identity file (see `keygen --out`)
-        #[arg(long, default_value = "~/.swarm/identity")]
+        #[arg(long, default_value_os_t = swarm_app::paths::data_dir().join("identity"))]
         identity: PathBuf,
     },
     /// Fetch and print a contact's posts: their public ones, and the rest
@@ -280,10 +283,10 @@ enum Command {
     Posts {
         /// A contact: their name, or their key
         contact: String,
-        #[arg(long, default_value = "~/.swarm/peers")]
+        #[arg(long, default_value_os_t = swarm_app::paths::data_dir().join("peers"))]
         contacts: PathBuf,
         /// Your identity file (see `keygen --out`)
-        #[arg(long, default_value = "~/.swarm/identity")]
+        #[arg(long, default_value_os_t = swarm_app::paths::data_dir().join("identity"))]
         identity: PathBuf,
     },
     /// Call a contact and wait for them to answer (it rings for 30
@@ -297,10 +300,10 @@ enum Command {
         /// how both ways are going is printed every few seconds instead.
         #[arg(long)]
         video: bool,
-        #[arg(long, default_value = "~/.swarm/peers")]
+        #[arg(long, default_value_os_t = swarm_app::paths::data_dir().join("peers"))]
         contacts: PathBuf,
         /// Your identity file (see `keygen --out`)
-        #[arg(long, default_value = "~/.swarm/identity")]
+        #[arg(long, default_value_os_t = swarm_app::paths::data_dir().join("identity"))]
         identity: PathBuf,
     },
     /// Groups: chats of several people, with no server. A group is named
@@ -357,7 +360,7 @@ enum DeviceCommand {
     /// Your devices, this one among them
     List,
     /// A code for adding a device to your user, good once for ten
-    /// minutes: on the new device, `swarm keygen --out <file> --join <code>`
+    /// minutes: on the new device, `swarm keygen --join <code>`
     Add,
     /// Take one of your devices out (by name, or the start of its key).
     /// Not this one: another of yours does.
@@ -429,7 +432,7 @@ enum GroupCommand {
     Post {
         group: String,
         text: String,
-        #[arg(long, default_value = "~/.swarm/identity")]
+        #[arg(long, default_value_os_t = swarm_app::paths::data_dir().join("identity"))]
         identity: PathBuf,
     },
     /// Give a group a name (none: it goes by its members' names).
@@ -442,12 +445,12 @@ enum GroupCommand {
     /// Print a group's members and messages, as kept here.
     Show {
         group: String,
-        #[arg(long, default_value = "~/.swarm/identity")]
+        #[arg(long, default_value_os_t = swarm_app::paths::data_dir().join("identity"))]
         identity: PathBuf,
     },
     /// List the groups you're in.
     List {
-        #[arg(long, default_value = "~/.swarm/identity")]
+        #[arg(long, default_value_os_t = swarm_app::paths::data_dir().join("identity"))]
         identity: PathBuf,
     },
 }
@@ -460,7 +463,7 @@ enum ContactCommand {
         name: String,
         address: String,
         key: String,
-        #[arg(long, default_value = "~/.swarm/peers")]
+        #[arg(long, default_value_os_t = swarm_app::paths::data_dir().join("peers"))]
         out: PathBuf,
     },
     /// Change a contact's address and key (`add` for a new one)
@@ -472,7 +475,7 @@ enum ContactCommand {
         /// key, not their name.
         #[arg(long)]
         rename: Option<String>,
-        #[arg(long, default_value = "~/.swarm/peers")]
+        #[arg(long, default_value_os_t = swarm_app::paths::data_dir().join("peers"))]
         out: PathBuf,
     },
     /// Delete a contact, by name, and everything kept about them, on all
@@ -483,7 +486,7 @@ enum ContactCommand {
         /// kept (see `contact blocked`)
         #[arg(long)]
         block: bool,
-        #[arg(long, default_value = "~/.swarm/peers")]
+        #[arg(long, default_value_os_t = swarm_app::paths::data_dir().join("peers"))]
         out: PathBuf,
     },
     /// Set a contact's own cover rate (see `swarm listen --cover`), or
@@ -498,7 +501,7 @@ enum ContactCommand {
         /// left cover off.
         #[arg(long)]
         require: bool,
-        #[arg(long, default_value = "~/.swarm/peers")]
+        #[arg(long, default_value_os_t = swarm_app::paths::data_dir().join("peers"))]
         out: PathBuf,
     },
     /// Let this contact control your shared screen as soon as they ask,
@@ -509,7 +512,7 @@ enum ContactCommand {
         name: String,
         #[arg(value_parser = ["on", "off"])]
         on: String,
-        #[arg(long, default_value = "~/.swarm/peers")]
+        #[arg(long, default_value_os_t = swarm_app::paths::data_dir().join("peers"))]
         out: PathBuf,
     },
     /// Have calls from this contact answered without asking, for a device
@@ -520,7 +523,7 @@ enum ContactCommand {
         name: String,
         /// off, voice or video
         mode: String,
-        #[arg(long, default_value = "~/.swarm/peers")]
+        #[arg(long, default_value_os_t = swarm_app::paths::data_dir().join("peers"))]
         out: PathBuf,
     },
     /// Save files from this contact straight to a folder, without asking,
@@ -530,12 +533,12 @@ enum ContactCommand {
         name: String,
         /// The folder, or off
         folder: String,
-        #[arg(long, default_value = "~/.swarm/peers")]
+        #[arg(long, default_value_os_t = swarm_app::paths::data_dir().join("peers"))]
         out: PathBuf,
     },
     /// List your contacts
     List {
-        #[arg(long, default_value = "~/.swarm/peers")]
+        #[arg(long, default_value_os_t = swarm_app::paths::data_dir().join("peers"))]
         path: PathBuf,
     },
     /// List contact requests: people who've added you, whom you haven't
@@ -562,7 +565,7 @@ fn main() -> Result<()> {
     swarm_core::secure::no_dumps();
     let cli = Cli::parse();
     let cover = cli.cover;
-    let identity = PathBuf::from("~/.swarm/identity");
+    let identity = swarm_app::paths::data_dir().join("identity");
     if !keeps_nothing(&cli.command, &expand_home(&identity)) {
         load_identity(identity)?;
     }
@@ -798,7 +801,7 @@ fn main() -> Result<()> {
         Some(Command::Transfer { action }) => run_transfer(action),
         Some(Command::Device { action }) => run_device(action),
         Some(Command::Group { action }) => {
-            let me = || load_identity(PathBuf::from("~/.swarm/identity"));
+            let me = || load_identity(swarm_app::paths::data_dir().join("identity"));
             match action {
                 GroupCommand::New { contacts } => run_group_new(contacts),
                 GroupCommand::Add { group, contact } => {

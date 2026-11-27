@@ -285,7 +285,7 @@ An incoming call always rings, with the caller's name, on every one of your devi
 
 ## An always-on Swarm (Raspberry Pi or server)
 A Swarm left running somewhere keeps your messages flowing and can answer calls.
-1. Make its identity: `swarm keygen --out ~/.swarm/identity` (or add it to your user with a code: `swarm keygen --out ~/.swarm/identity --join '<code>'`).
+1. Make its identity: `swarm keygen --out ~/.config/swarm/identity` (or add it to your user with a code: `swarm keygen --join '<code>'`).
 2. Add contacts: `swarm contact add bob <address> <key>`.
 3. Run `swarm listen`.
 Started from a terminal, it asks for the passphrase. Started with nobody at it (at boot, say), it waits, locked and offline, until you log in (over ssh, say) and run `swarm unlock`. That happens once each time it starts. Nothing stores the passphrase to unlock it by itself; that is deliberate, so a stolen Pi gives nothing away.
@@ -506,7 +506,7 @@ Every cryptographic key in Swarm originates either from your operating system's 
 **Device Key** – Each device also makes a key of its own when it is set up, kept locked on that device and never shown as words. Your identity signs each device's key, and at every connection the device proves it holds its key, so a removed device can be refused by your contacts.
 
 ### Data at Rest (Local Files)
-**Individual Record Sealing** – Every message, post, contact entry, setting, and file inside `~/.swarm/` is encrypted individually using XChaCha20-Poly1305 with a fresh random nonce. Records are cryptographically tied to their specific files to prevent tampering or relocation.
+**Individual Record Sealing** – Every message, post, contact entry, setting, and file inside Swarm's folder (see [[File storage]]) is encrypted individually using XChaCha20-Poly1305 with a fresh random nonce. Records are cryptographically tied to their specific files to prevent tampering or relocation.
 **Obfuscated Filenames** – Files related to specific contacts use scrambled filenames generated via HMAC-SHA256, so your folder structure does not reveal who you communicate with.
 **Auto-Deletion & Locking** – Self-deleting messages are purged automatically when their time is up. Swarm always starts locked; with Lock when left turned on, it also locks after a time unattended, and waits for the passphrase.
 
@@ -521,12 +521,12 @@ When connecting to contacts, Swarm sets up strong forward secrecy and transport 
 **Sealed Cover Packets** – When cover mode is on, voice, video, and background data are packed into packets of identical size sent on a strict fixed beat. Each packet uses a unique sequential nonce, so replayed or forged packets are dropped instantly.
 **Relayed connections** – nothing travels inside anything else: each hop is a Noise connection of its own. So whoever passes something on can see what it passes on. In a conference call, a member passing on another's voice or pictures is someone you're both in the call with, and hears and sees them anyway. A device relaying for your others is one of your own, holding your keys. There is no separate key for a call's sound and pictures yet.
 
-### Key Derivation & Local Storage (~/.swarm/)
+### Key Derivation & Local Storage
 From the Identity Seed, Swarm derives specialised cryptographic keys using HKDF-SHA256 and SHA-512:
 **Storage Key** – Seals and protects all permanent local data stored on your disk.
 **Ed25519 Key** – Used for cryptographic signatures. Its public half is your Swarm ID – the unique identifier you share with contacts.
 **X25519 Key** – Used for key agreement (Diffie-Hellman handshakes). Its public half is derived directly from your Swarm ID, so no separate exchange is needed.
-**Local Sealing** – Your identity file (`~/.swarm/identity`) is encrypted using XChaCha20-Poly1305 locked with your Unlock Key. Without your passphrase, this file is useless.
+**Local Sealing** – Your identity file (`identity`, in Swarm's folder) is encrypted using XChaCha20-Poly1305 locked with your Unlock Key. Without your passphrase, this file is useless.
 
 #### Encryption structure
 How the keys above are made and used, from your 12 words and passphrase down to what each one protects.
@@ -557,7 +557,7 @@ Within this bandwidth, priority is given first to voice, then call signals, then
 Anything that is passed around, rather than only sent straight to one contact, is signed with the writer's Ed25519 key: posts, group messages and changes to who is in a group, your name, status and picture, your list of devices, and "where I am now" notes that help contacts find you after a move. Anyone can check who wrote them, whoever delivered them, so someone in a group or a device passing them on can't change them.
 
 ## File storage
-Everything Swarm keeps is in the .swarm folder in your home folder (`~/.swarm`), each record encrypted under your storage key and file names scrambled (see [[Data at Rest (Local Files)]]). Nothing is kept anywhere else: there is no server copy. Files you receive are the exception: they are saved, unencrypted, in the folder you chose.
+Everything Swarm keeps is in one folder, Swarm's folder: `~/.config/swarm` on Linux, `AppData\Local\Swarm` (in your user folder) on Windows, and `~/Library/Application Support/Swarm` on a Mac. If you already have a `.swarm` folder in your home folder, from an earlier version, that one is used instead, so nothing moves. To keep it somewhere else, set `SWARM_HOME` to that folder before starting Swarm: a folder of its own, used for nothing else. Each record in it is encrypted under your storage key, and file names are scrambled (see [[Data at Rest (Local Files)]]). Nothing is kept anywhere else: there is no server copy. Files you receive are the exception: they are saved, unencrypted, in the folder you chose.
 
 ## What isn't protected
 - Someone watching the network can see that two addresses are talking, though not what they say. Cover mode also hides when and how much.
@@ -656,9 +656,9 @@ Every command reads the passphrase from standard input. When a Swarm is already 
 | `swarm` | the window (or the TUI without a screen) |
 | `swarm --tui` | the terminal interface |
 | `swarm --cover 64k` | either, with cover mode for every contact |
-| `swarm keygen --out ~/.swarm/identity` | make an identity (shows your 12 words) |
-| `swarm keygen --restore --out ~/.swarm/identity` | bring one back from its 12 words |
-| `swarm keygen --out ~/.swarm/identity --join '<code>'` | add this device to your user |
+| `swarm keygen --out ~/.config/swarm/identity` | make an identity (shows your 12 words) |
+| `swarm keygen --restore --out ~/.config/swarm/identity` | bring one back from its 12 words |
+| `swarm keygen --join '<code>'` | add this device to your user |
 | `swarm words` | show your 12 words |
 | `swarm passphrase` | change your passphrase (--forgotten: from your words) |
 | `swarm pubkey` | print your key |
