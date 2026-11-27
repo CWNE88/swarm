@@ -480,9 +480,11 @@ impl NodeHandle {
         self.ctx.message_updates.subscribe()
     }
 
-    /// Whether there's a connection to `key` (a root key) right now.
+    /// Whether `key` (a root key) is reachable from here right now: a
+    /// connection of this device's, or through another of this user's
+    /// devices (as the contacts list counts them online).
     pub fn is_connected(&self, key: &[u8; 32]) -> bool {
-        self.ctx.connected.locked().contains_key(key)
+        self.ctx.connected.locked().contains_key(key) || super::proxy::through(&self.ctx, key).is_some()
     }
 
     /// Makes a new group, with this user in it, and then each of

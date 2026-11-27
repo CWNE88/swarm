@@ -489,6 +489,9 @@ async fn a_picture_and_a_group_go_through_another_device() {
     wait_for("the phone to have tim", || phone.handle.knows("tim")).await;
     assert!(desk.handle.allow_relay(desk.handle.device().public_key_bytes(), true).unwrap());
     wait_for("tim online on the phone, through the desktop", || phone.handle.peer_status("tim").is_some_and(|s| s.online)).await;
+    // A group shows him there as the contacts list does: connected,
+    // through the desktop, though the phone has no connection of its own.
+    assert!(phone.handle.is_connected(&tim_key), "tim reachable from the phone, as a group's members show");
 
     wait_for_long("tim's picture on the phone", || {
         swarm_core::profile::cached(&phone.paths.profiles(), &tim_key).is_some_and(|p| p.status == "at the beach" && p.avatar == avatar)
