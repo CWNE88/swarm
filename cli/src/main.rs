@@ -835,15 +835,18 @@ fn prompt(label: &str) -> Option<String> {
     }
 }
 
-/// Whether there's a screen to open Swarm's window on: always on Windows;
-/// on Linux and the like, any X11 or Wayland display — a desktop session,
-/// or an SSH login forwarding X, where the window opens over the network.
-/// A plain text console or SSH login gets the terminal UI, as does `--tui`.
+/// Whether to open Swarm's window: always on Windows, on a local macOS
+/// session, and anywhere with an X11 or Wayland display on Linux and the
+/// like. A plain text console or SSH login without a display gets the
+/// terminal UI, as does `--tui`.
 fn can_open_window() -> bool {
     if !cfg!(feature = "gui") {
         return false;
     }
     let set = |name: &str| std::env::var_os(name).is_some_and(|v| !v.is_empty());
+    if cfg!(target_os = "macos") {
+        return !set("SSH_CONNECTION");
+    }
     cfg!(windows) || set("DISPLAY") || set("WAYLAND_DISPLAY")
 }
 
@@ -860,7 +863,7 @@ fn run_window(cover: Option<u64>) -> Result<()> {
             FreeConsole();
         }
     }
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     if std::env::var_os("WINIT_X11_SCALE_FACTOR").is_none() {
         std::env::set_var("WINIT_X11_SCALE_FACTOR", "randr");
     }

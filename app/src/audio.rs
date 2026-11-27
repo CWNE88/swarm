@@ -1,6 +1,6 @@
 //! Microphone capture and speaker playback for voice calls, via `cpal`
 //! (PulseAudio on Linux when there's a server — PipeWire's will do —
-//! else ALSA; WASAPI on Windows) — the platform-specific half of calling;
+//! else ALSA; WASAPI on Windows; Core Audio on macOS) — the platform-specific half of calling;
 //! the codec/wire side lives in `swarm_core::call`.
 //!
 //! Not ALSA where there's a sound server: going through ALSA's plugin
@@ -226,7 +226,12 @@ fn open(mic_tx: mpsc::UnboundedSender<Vec<f32>>, speaker_rx: Option<mpsc::Unboun
 
         let open_mic = || {
             let (device, chosen) = crate::audio_devices::device(&host, Way::Microphone);
-            (device.ok_or_else(|| anyhow!("no microphone found")).and_then(|d| mic_stream(&host, &d, mic_side.clone(), mic_tx.clone(), thread_muted.clone())), chosen)
+            let stream = device.ok_or_else(|| anyhow!("no microphone found")).and_then(|d| {
+                #[cfg(target_os = "macos")]
+                check_apple_mic_permission()?;
+                mic_stream(&host, &d, mic_side.clone(), mic_tx.clone(), thread_muted.clone())
+            });
+            (stream, chosen)
         };
         let open_speaker = |side: &Arc<std::sync::Mutex<SpeakerSide>>| {
             let (device, chosen) = crate::audio_devices::device(&host, Way::Speaker);
@@ -252,6 +257,8 @@ fn open(mic_tx: mpsc::UnboundedSender<Vec<f32>>, speaker_rx: Option<mpsc::Unboun
         note_missing(&input, &output);
         let _ = ready_tx.send(Ok(()));
 
+        #[cfg(target_os = "macos")]
+        let mut awaiting_permission = input.as_ref().is_err_and(|e| e.is::<MicPermissionPending>());
         let mut seen = crate::audio_devices::changes();
         while !thread_stop.load(Ordering::SeqCst) {
             std::thread::sleep(std::time::Duration::from_millis(50));
@@ -260,13 +267,21 @@ fn open(mic_tx: mpsc::UnboundedSender<Vec<f32>>, speaker_rx: Option<mpsc::Unboun
             if let (Some(side), false) = (&speaker_side, matches!(output, Some(Ok(_)))) {
                 swarm_core::lock::Locked::locked(&**side).mixer.discard();
             }
-            if crate::audio_devices::changes() == seen {
+            #[cfg(target_os = "macos")]
+            let permission_resolved = awaiting_permission && apple_mic_permission(false) != 2;
+            #[cfg(not(target_os = "macos"))]
+            let permission_resolved = false;
+            if crate::audio_devices::changes() == seen && !permission_resolved {
                 continue;
             }
             seen = crate::audio_devices::changes();
-            if crate::audio_devices::chosen(Way::Microphone) != mic_chosen {
+            if permission_resolved || crate::audio_devices::chosen(Way::Microphone) != mic_chosen {
                 drop(std::mem::replace(&mut input, Err(anyhow!("changing"))));
                 (input, mic_chosen) = open_mic();
+                #[cfg(target_os = "macos")]
+                {
+                    awaiting_permission = input.as_ref().is_err_and(|e| e.is::<MicPermissionPending>());
+                }
             }
             if let Some(side) = &speaker_side {
                 if crate::audio_devices::chosen(Way::Speaker) != speaker_chosen {
@@ -293,6 +308,39 @@ fn open(mic_tx: mpsc::UnboundedSender<Vec<f32>>, speaker_rx: Option<mpsc::Unboun
         }
     }
 }
+
+#[cfg(target_os = "macos")]
+fn apple_mic_permission(request: bool) -> i32 {
+    unsafe extern "C" {
+        fn swarm_macos_microphone_permission(request: bool) -> i32;
+    }
+    // The native permission request is asynchronous and reads no audio.
+    unsafe { swarm_macos_microphone_permission(request) }
+}
+
+#[cfg(target_os = "macos")]
+fn check_apple_mic_permission() -> Result<()> {
+    match apple_mic_permission(true) {
+        1 => Ok(()),
+        2 => Err(MicPermissionPending.into()),
+        -1 => Err(anyhow!("open Swarm.app to use the microphone")),
+        _ => Err(anyhow!("allow Swarm in System Settings > Privacy & Security > Microphone")),
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Debug)]
+struct MicPermissionPending;
+
+#[cfg(target_os = "macos")]
+impl std::fmt::Display for MicPermissionPending {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "allow microphone access in the macOS prompt, then reopen the microphone meter if needed")
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl std::error::Error for MicPermissionPending {}
 
 /// The microphone's side of the audio thread, kept while the device it
 /// comes from is changed.

@@ -152,7 +152,8 @@ fn open_here(url: &str) -> anyhow::Result<()> {
 
 #[cfg(all(unix, not(target_os = "android")))]
 fn open_here(url: &str) -> anyhow::Result<()> {
-    let mut child = std::process::Command::new("xdg-open")
+    let opener = if cfg!(target_os = "macos") { "/usr/bin/open" } else { "xdg-open" };
+    let mut child = std::process::Command::new(opener)
         .arg(url)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())

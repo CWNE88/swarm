@@ -10,6 +10,58 @@ fn main() {
     let local = std::process::Command::new("date").arg("+%Y-%m-%d %H:%M").output().ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
     let built = local.filter(|s| !s.is_empty()).unwrap_or_else(utc_now);
     println!("cargo:rustc-env=SWARM_BUILT={built}");
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        println!("cargo:rerun-if-env-changed=MACOSX_DEPLOYMENT_TARGET");
+        let target = std::env::var("TARGET").expect("Cargo target");
+        let minimum = std::env::var("MACOSX_DEPLOYMENT_TARGET").unwrap_or_else(|_| "14.0".into());
+        let version = format!("-mmacosx-version-min={minimum}");
+        build_apple(
+            "macosx",
+            &["-target", &target, &version],
+            "swarm_macos",
+            &["camera_macos", "filedialog_macos", "screen_macos"],
+            &["AppKit", "AVFoundation", "CoreGraphics", "CoreMedia", "CoreVideo", "Foundation", "ScreenCaptureKit"],
+        );
+    }
+}
+
+fn build_apple(sdk: &str, target_args: &[&str], library: &str, sources: &[&str], frameworks: &[&str]) {
+    use std::path::PathBuf;
+    use std::process::Command;
+
+    println!("cargo:rerun-if-env-changed=SDKROOT");
+    println!("cargo:rerun-if-env-changed=DEVELOPER_DIR");
+
+    let out = PathBuf::from(std::env::var_os("OUT_DIR").expect("Cargo output directory"));
+    let mut objects = Vec::new();
+    for name in sources {
+        let source = format!("src/{name}.m");
+        let object = out.join(format!("{name}.o"));
+        let status = Command::new("xcrun")
+            .args(["--sdk", sdk, "clang"])
+            .args(target_args)
+            .args(["-fobjc-arc", "-fblocks", "-O2", "-Werror=unguarded-availability", "-c"])
+            .arg(&source)
+            .arg("-o")
+            .arg(&object)
+            .status()
+            .expect("starting Apple clang");
+        assert!(status.success(), "compiling {source} failed");
+        objects.push(object);
+    }
+
+    let status = Command::new("xcrun")
+        .args(["--sdk", sdk, "libtool", "-static", "-o"])
+        .arg(out.join(format!("lib{library}.a")))
+        .args(objects)
+        .status()
+        .expect("starting Apple libtool");
+    assert!(status.success(), "archiving the {sdk} support code failed");
+    println!("cargo:rustc-link-search=native={}", out.display());
+    println!("cargo:rustc-link-lib=static={library}");
+    for framework in frameworks {
+        println!("cargo:rustc-link-lib=framework={framework}");
+    }
 }
 
 fn utc_now() -> String {

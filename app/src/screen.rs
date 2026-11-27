@@ -2,7 +2,9 @@
 //! (`x11rb`, the whole of the primary monitor), Wayland through the
 //! desktop's portal and PipeWire (whichever monitor's chosen in its
 //! dialog — see `screen_wayland.rs`), GDI on Windows (the primary
-//! monitor), the mouse pointer drawn in on all three.
+//! monitor) and ScreenCaptureKit on macOS (the primary monitor or the
+//! display chosen in the system picker), with
+//! the mouse pointer drawn in.
 //!
 //! Like the camera (see `camera`), a thread of its own takes pictures and
 //! keeps only the newest (`Screen::subscribe`) — at most `MAX_FPS` a
@@ -17,6 +19,9 @@
 #[cfg(target_os = "linux")]
 #[path = "screen_wayland.rs"]
 mod wayland;
+#[cfg(target_os = "macos")]
+#[path = "screen_macos.rs"]
+mod macos;
 
 /// The portal asked for a screen to share (by the portal helper): see
 /// `screen_wayland.rs`.
@@ -65,6 +70,11 @@ trait Grabber: 'static {
     fn info(&self) -> ScreenInfo;
     /// The screen as it is now, pointer and all, as RGB.
     fn grab(&mut self) -> Result<Picture>;
+    /// A subsequent picture. A push-based capture can report that it has
+    /// no new frame to read when the desktop has stayed still.
+    fn next(&mut self) -> Result<Option<Picture>> {
+        self.grab().map(Some)
+    }
     /// Why the screen can't be had any more, if it can't (the desktop
     /// stopped sharing it, say).
     fn ended(&self) -> Option<String> {
@@ -124,7 +134,11 @@ impl Screen {
         {
             Screen::start(gdi::GdiGrabber::open)
         }
-        #[cfg(not(any(target_os = "linux", windows)))]
+        #[cfg(target_os = "macos")]
+        {
+            Screen::start(macos::MacScreen::open)
+        }
+        #[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
         {
             anyhow::bail!("sharing the screen isn't supported on this system yet")
         }
@@ -165,11 +179,12 @@ impl Screen {
                 while !stop.load(Ordering::Relaxed) {
                     std::thread::sleep(next.saturating_duration_since(Instant::now()));
                     next = (next + every).max(Instant::now());
-                    let picture = match grabber.grab() {
-                        Ok(picture) => {
+                    let picture = match grabber.next() {
+                        Ok(Some(picture)) => {
                             taken.fetch_add(1, Ordering::Relaxed);
                             picture
                         }
+                        Ok(None) => continue,
                         Err(e) => {
                             failed.fetch_add(1, Ordering::Relaxed);
                             if let Some(why) = grabber.ended() {

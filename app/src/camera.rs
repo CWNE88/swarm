@@ -1,6 +1,6 @@
 //! Webcam capture for the TUI's camera preview (`w`) and video calls:
-//! V4L2 on Linux (the `v4l` crate), Media Foundation on Windows
-//! (`camera_mf.rs`). Like audio, capture belongs to the front end — core
+//! V4L2 on Linux, Media Foundation on Windows, AVFoundation on macOS,
+//! and Camera2 on Android. Like audio, capture belongs to the front end — core
 //! will only ever see frames handed to it.
 //!
 //! A thread of its own reads the camera and keeps only the newest frame
@@ -9,8 +9,8 @@
 //!
 //! Settings picks the camera, by name (`choose`), where there's more
 //! than one; one not plugged in is passed over. `SWARM_CAMERA` picks the
-//! device whatever Settings says (`/dev/video2`; on Windows a number or
-//! part of the camera's name), `test` for a moving test pattern (`test-busy`
+//! device whatever Settings says (`/dev/video2`; on Windows or macOS a
+//! number or part of the camera's name), `test` for a moving test pattern (`test-busy`
 //! with grain all over, taking all the bitrate it's given), for
 //! trying the preview with no camera at all, or `still:<file>` for a
 //! picture file held up to it (a QR code, say). Otherwise the first camera
@@ -22,9 +22,12 @@ mod mf;
 #[cfg(target_os = "android")]
 #[path = "camera_android.rs"]
 mod android;
+#[cfg(target_os = "macos")]
+#[path = "camera_macos.rs"]
+mod avfoundation;
 
 use anyhow::Result;
-#[cfg(not(any(windows, target_os = "android")))]
+#[cfg(not(any(windows, target_os = "android", target_os = "macos")))]
 use anyhow::bail;
 #[cfg(target_os = "linux")]
 use anyhow::Context;
@@ -173,14 +176,19 @@ fn look_for_cameras() -> Vec<Found> {
     numbered(android::cameras())
 }
 
-#[cfg(not(any(target_os = "linux", windows, target_os = "android")))]
+#[cfg(target_os = "macos")]
+fn look_for_cameras() -> Vec<Found> {
+    numbered(avfoundation::cameras())
+}
+
+#[cfg(not(any(target_os = "linux", windows, target_os = "android", target_os = "macos")))]
 fn look_for_cameras() -> Vec<Found> {
     Vec::new()
 }
 
 /// Names and how each is opened, as `Found`: a name shared with one
 /// before it gets a number ("C922 2").
-#[cfg_attr(not(any(target_os = "linux", windows, target_os = "android")), allow(dead_code))]
+#[cfg_attr(not(any(target_os = "linux", windows, target_os = "android", target_os = "macos")), allow(dead_code))]
 fn numbered(cameras: Vec<(String, String)>) -> Vec<Found> {
     let mut seen: Vec<String> = Vec::new();
     let mut out = Vec::new();
@@ -213,7 +221,7 @@ pub fn chosen_trouble() -> Option<String> {
 }
 
 /// The chosen camera, if it started; why not noted otherwise.
-#[cfg(any(target_os = "linux", windows, target_os = "android"))]
+#[cfg(any(target_os = "linux", windows, target_os = "android", target_os = "macos"))]
 fn chosen_started(started: Result<Camera>) -> Option<Camera> {
     let trouble = started.as_ref().err().map(|e| format!("{e:#}"));
     if let Ok(mut noted) = CHOSEN_TROUBLE.lock() {
@@ -455,7 +463,14 @@ impl Camera {
                 Some(camera) => Ok(camera),
                 None => Camera::start_android(None, want),
             },
-            #[cfg(not(any(target_os = "linux", windows, target_os = "android")))]
+            #[cfg(target_os = "macos")]
+            Some(other) => Camera::start_avfoundation(Some(other.to_string()), want),
+            #[cfg(target_os = "macos")]
+            None => match in_settings().map(|camera| Camera::start_avfoundation(Some(camera.open), want)).and_then(chosen_started) {
+                Some(camera) => Ok(camera),
+                None => Camera::start_avfoundation(None, want),
+            },
+            #[cfg(not(any(target_os = "linux", windows, target_os = "android", target_os = "macos")))]
             _ => bail!("cameras aren't supported on this system yet — SWARM_CAMERA=test shows a test pattern"),
             #[cfg(target_os = "linux")]
             None => {
@@ -639,6 +654,16 @@ impl Camera {
         Ok(Camera { info, asked: want, opened: Instant::now(), latest, captured, stop, thread: Some(thread) })
     }
 
+    #[cfg(target_os = "macos")]
+    fn start_avfoundation(choice: Option<String>, want: Size) -> Result<Camera> {
+        let latest = watch::Sender::new(None);
+        let captured = Arc::new(Captured::default());
+        let stop = Arc::new(AtomicBool::new(false));
+        let opened = Instant::now();
+        let (info, thread) = avfoundation::start(choice, want, latest.clone(), captured.clone(), stop.clone())?;
+        Ok(Camera { info, asked: want, opened, latest, captured, stop, thread: Some(thread) })
+    }
+
     /// The test pattern; `busy`, with grain all over, so it takes all the
     /// bitrate it's given, as a real camera's pictures do.
     fn start_test_pattern(want: Size, busy: bool) -> Camera {
@@ -779,7 +804,7 @@ fn steady_frame_rate(device: &Device) -> Option<v4l::control::Value> {
 /// See `Camera::insist_on_chip`: 0 the chip where it can, 1 not, 2 the chip.
 static INSIST_ON_CHIP: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
-#[cfg(not(target_os = "android"))]
+#[cfg(any(target_os = "linux", windows))]
 fn chip_wanted() -> bool {
     match INSIST_ON_CHIP.load(std::sync::atomic::Ordering::Relaxed) {
         1 => false,

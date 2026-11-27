@@ -1,10 +1,10 @@
 //! The system's own file dialog, for the window: a file to send, or a
 //! folder to save one in. On Linux it's the desktop's (GNOME's, KDE's…),
 //! asked for through its portal (`org.freedesktop.portal.FileChooser`,
-//! over D-Bus, as Flatpak apps and browsers do); on Windows, the common
-//! file dialog. Where there's none to be had (no portal, a lab, another
-//! system), it says so, and the window uses its own browser instead; the
-//! TUI always has its own.
+//! over D-Bus, as Flatpak apps and browsers do); on macOS, AppKit's open
+//! panel; on Windows, the common file dialog. Where there's no system
+//! dialog, the window uses its own browser instead; the TUI always has
+//! its own.
 //!
 //! Each blocks until the person has chosen: called on a thread of its own.
 //!
@@ -224,7 +224,34 @@ fn choose(_title: &str, _start: &Path, folder: bool, _parent: Parent) -> Result<
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "android", windows)))]
+#[cfg(target_os = "macos")]
+fn choose(title: &str, start: &Path, folder: bool, _parent: Parent) -> Result<Option<PathBuf>> {
+    use std::ffi::{c_char, CStr, CString, OsString};
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+
+    unsafe extern "C" {
+        fn swarm_macos_choose_path(
+            title: *const c_char, start: *const c_char, folder: bool, path: *mut *mut c_char,
+        ) -> i32;
+    }
+
+    let title = CString::new(title)?;
+    let start = CString::new(start.as_os_str().as_bytes())?;
+    let mut path = std::ptr::null_mut();
+    // The bridge blocks until it has either cancelled or handed back an
+    // owned C string. AppKit itself runs on the main thread.
+    match unsafe { swarm_macos_choose_path(title.as_ptr(), start.as_ptr(), folder, &mut path) } {
+        0 => Ok(None),
+        1 if !path.is_null() => {
+            let bytes = unsafe { CStr::from_ptr(path) }.to_bytes().to_vec();
+            unsafe { libc::free(path.cast()) };
+            Ok(Some(PathBuf::from(OsString::from_vec(bytes))))
+        }
+        _ => anyhow::bail!("no system file dialog here"),
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos", windows)))]
 fn choose(_title: &str, _start: &Path, _folder: bool, _parent: Parent) -> Result<Option<PathBuf>> {
     anyhow::bail!("no system file dialog here")
 }

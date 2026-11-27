@@ -1,8 +1,8 @@
 //! This device's addresses, IPv6 and IPv4 — the ones worth giving to
-//! someone as where to reach you. Temporary ("privacy") IPv6 addresses
-//! are left out: they change every day or so, and a peer given one loses
-//! you when it does. So are ones on their way out (deprecated) or not
-//! yet usable, and interfaces that are down or have nothing plugged in.
+//! someone as where to reach you. Where the system reports their state,
+//! temporary ("privacy") IPv6 addresses, deprecated ones and addresses
+//! that are not yet usable are left out. Interfaces that are down or
+//! have nothing plugged in are skipped.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Mutex;
@@ -42,7 +42,7 @@ fn fresh<T: Clone>(cache: &Mutex<Option<(Instant, T)>>, look_up: fn() -> T) -> T
     value
 }
 
-/// Every stable IPv6 address configured here, and its interface's index
+/// Every usable IPv6 address configured here, and its interface's index
 /// (see `look_up_ipv6`).
 fn host_ipv6_with_interface() -> Vec<(Ipv6Addr, u32)> {
     fresh(&IPV6, look_up_ipv6)
@@ -53,8 +53,7 @@ pub fn host_ipv4_addresses() -> Vec<Ipv4Addr> {
     fresh(&IPV4, look_up_ipv4)
 }
 
-/// Every stable IPv6 address configured here.
-#[cfg(any(target_os = "linux", target_os = "android"))]
+/// Every usable IPv6 address configured here.
 pub fn host_ipv6_addresses() -> Vec<Ipv6Addr> {
     host_ipv6_with_interface().into_iter().map(|(a, _)| a).collect()
 }
@@ -206,12 +205,6 @@ fn is_mobile_data(name: &[u8]) -> bool {
     [&b"rmnet"[..], b"ccmni", b"seth_lte"].iter().any(|p| name.starts_with(p))
 }
 
-/// Every stable IPv6 address configured here, from `GetAdaptersAddresses`.
-#[cfg(windows)]
-pub fn host_ipv6_addresses() -> Vec<Ipv6Addr> {
-    host_ipv6_with_interface().into_iter().map(|(a, _)| a).collect()
-}
-
 /// Every stable IPv6 address configured here, and its interface's index.
 #[cfg(windows)]
 fn look_up_ipv6() -> Vec<(Ipv6Addr, u32)> {
@@ -291,12 +284,93 @@ fn windows_addresses() -> Vec<(IpAddr, u32)> {
     found
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "android", windows)))]
-pub fn host_ipv6_addresses() -> Vec<Ipv6Addr> {
-    Vec::new()
+#[cfg(target_os = "macos")]
+fn look_up_ipv6() -> Vec<(Ipv6Addr, u32)> {
+    use socket2::{Domain, Protocol, Socket, Type};
+    use std::os::fd::AsRawFd;
+
+    let Ok(socket) = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP)) else {
+        return Vec::new();
+    };
+    let mut list = std::ptr::null_mut();
+    if unsafe { libc::getifaddrs(&mut list) } != 0 {
+        return Vec::new();
+    }
+
+    let mut found = Vec::new();
+    let mut at = list;
+    let up = (libc::IFF_UP | libc::IFF_RUNNING) as u32;
+    while !at.is_null() {
+        let entry = unsafe { &*at };
+        at = entry.ifa_next;
+        if entry.ifa_flags & up != up
+            || entry.ifa_addr.is_null()
+            || unsafe { (*entry.ifa_addr).sa_family } as i32 != libc::AF_INET6
+        {
+            continue;
+        }
+        let addr = unsafe { &*entry.ifa_addr.cast::<libc::sockaddr_in6>() };
+        if !macos_stable_ipv6(socket.as_raw_fd(), entry, addr) {
+            continue;
+        }
+        let mut bytes = addr.sin6_addr.s6_addr;
+        if Ipv6Addr::from(bytes).is_unicast_link_local() {
+            // Darwin's kernel can store the zone in the address. The
+            // interface index travels separately, never in the address.
+            bytes[2..4].fill(0);
+        }
+        let index = if addr.sin6_scope_id != 0 {
+            addr.sin6_scope_id
+        } else {
+            unsafe { libc::if_nametoindex(entry.ifa_name) }
+        };
+        found.push((Ipv6Addr::from(bytes), index));
+    }
+    unsafe { libc::freeifaddrs(list) };
+    found
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "android", windows)))]
+/// Darwin's getifaddrs has interface flags, but only SIOCGIFAFLAG_IN6
+/// reports whether the particular IPv6 address is temporary or ready.
+#[cfg(target_os = "macos")]
+fn macos_stable_ipv6(fd: libc::c_int, entry: &libc::ifaddrs, addr: &libc::sockaddr_in6) -> bool {
+    // Darwin's <netinet6/in6_var.h>. icmp6_ifstat is the biggest union
+    // member in in6_ifreq (34 uint64_t counters on both macOS targets).
+    #[repr(C)]
+    union AddressData {
+        addr: libc::sockaddr_in6,
+        flags: libc::c_int,
+        storage: [u64; 34],
+    }
+    #[repr(C)]
+    struct AddressRequest {
+        name: [libc::c_char; libc::IFNAMSIZ as usize],
+        data: AddressData,
+    }
+    // _IOWR('i', 73, struct in6_ifreq)
+    const GET_FLAGS: libc::c_ulong = 0xc000_0000
+        | ((std::mem::size_of::<AddressRequest>() as libc::c_ulong) << 16)
+        | ((b'i' as libc::c_ulong) << 8)
+        | 73;
+    const TENTATIVE: libc::c_int = 0x0002;
+    const DUPLICATED: libc::c_int = 0x0004;
+    const DETACHED: libc::c_int = 0x0008;
+    const DEPRECATED: libc::c_int = 0x0010;
+    const TEMPORARY: libc::c_int = 0x0080;
+    const OPTIMISTIC: libc::c_int = 0x0200;
+    let mut request = AddressRequest {
+        name: [0; libc::IFNAMSIZ as usize],
+        data: AddressData { storage: [0; 34] },
+    };
+    unsafe {
+        libc::strncpy(request.name.as_mut_ptr(), entry.ifa_name, request.name.len() - 1);
+        request.data.addr = *addr;
+        libc::ioctl(fd, GET_FLAGS, &mut request as *mut AddressRequest) == 0
+            && request.data.flags & (TENTATIVE | DUPLICATED | DETACHED | DEPRECATED | TEMPORARY | OPTIMISTIC) == 0
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos", windows)))]
 fn look_up_ipv6() -> Vec<(Ipv6Addr, u32)> {
     Vec::new()
 }
@@ -326,7 +400,7 @@ fn neighbour_links() -> Option<Vec<u32>> {
     fresh(&LINKS, look_up_links)
 }
 
-#[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
 fn look_up_links() -> Option<Vec<u32>> {
     let mut found = Vec::new();
     let mut list: *mut libc::ifaddrs = std::ptr::null_mut();
@@ -348,13 +422,13 @@ fn look_up_links() -> Option<Vec<u32>> {
     Some(found)
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "android")))]
+#[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
 fn look_up_links() -> Option<Vec<u32>> {
     None
 }
 
 /// Whether an interface with these flags (`IFF_*`) can have neighbours.
-#[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
 fn is_neighbour_link(flags: u32) -> bool {
     let has = |flag: libc::c_int| flags & flag as u32 != 0;
     has(libc::IFF_UP) && has(libc::IFF_RUNNING) && has(libc::IFF_MULTICAST) && !has(libc::IFF_LOOPBACK) && !has(libc::IFF_POINTOPOINT)
@@ -392,7 +466,7 @@ pub fn link_scopes() -> Vec<u32> {
 /// Every IPv4 address on an interface that's up and has a link, loopback
 /// (and, on Android, the carrier's tunnels and mobile data) aside, from
 /// `getifaddrs`.
-#[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
 fn look_up_ipv4() -> Vec<Ipv4Addr> {
     let mut found = Vec::new();
     let mut list: *mut libc::ifaddrs = std::ptr::null_mut();
@@ -419,7 +493,7 @@ fn look_up_ipv4() -> Vec<Ipv4Addr> {
     found
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "android", windows)))]
+#[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos", windows)))]
 fn look_up_ipv4() -> Vec<Ipv4Addr> {
     Vec::new()
 }
@@ -526,7 +600,7 @@ pub fn seen_from_outside(node: &swarm_core::node::NodeHandle, peers: &std::colle
 mod tests {
     /// The phone's interfaces as `ip link` showed them: only Wi-Fi (and a
     /// hotspot's, flagged as Wi-Fi is) has neighbours.
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
     #[test]
     fn only_a_link_with_neighbours_is_one_for_link_local_addresses() {
         use libc::{IFF_BROADCAST, IFF_LOOPBACK, IFF_MULTICAST, IFF_NOARP, IFF_POINTOPOINT, IFF_RUNNING, IFF_UP};

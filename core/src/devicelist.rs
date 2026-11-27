@@ -36,13 +36,29 @@ pub fn validate_name(name: &str) -> Result<(), String> {
 /// A name for this device to start from: its host name, as the system
 /// has it.
 pub fn default_name() -> String {
-    let from_system = if cfg!(windows) {
-        std::env::var("COMPUTERNAME").ok()
-    } else {
-        std::fs::read_to_string("/proc/sys/kernel/hostname").or_else(|_| std::fs::read_to_string("/etc/hostname")).ok()
-    };
+    let from_system = host_name();
     let name: String = from_system.unwrap_or_default().trim().chars().take(MAX_NAME_CHARS).collect();
     if validate_name(&name).is_ok() { name } else { "this device".to_string() }
+}
+
+#[cfg(target_os = "macos")]
+fn host_name() -> Option<String> {
+    let mut name: [libc::c_char; 256] = [0; 256];
+    if unsafe { libc::gethostname(name.as_mut_ptr(), name.len()) } != 0 {
+        return None;
+    }
+    let bytes = name.map(|byte| byte as u8);
+    Some(std::ffi::CStr::from_bytes_until_nul(&bytes).ok()?.to_string_lossy().into_owned())
+}
+
+#[cfg(windows)]
+fn host_name() -> Option<String> {
+    std::env::var("COMPUTERNAME").ok()
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn host_name() -> Option<String> {
+    std::fs::read_to_string("/proc/sys/kernel/hostname").or_else(|_| std::fs::read_to_string("/etc/hostname")).ok()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
