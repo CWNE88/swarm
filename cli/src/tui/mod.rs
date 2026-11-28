@@ -1054,7 +1054,7 @@ impl App {
             Some(SidebarEntry::Channel(_)) if peers => out.extend([b("Chat", KeyCode::Enter), b("Add people", c('g')), b("Leave", c('l'))]),
             Some(SidebarEntry::Channel(_)) => {
                 if !call(&mut out) {
-                    out.push(b("Call", c('c')));
+                    out.extend([b("Call", c('c')), b("Video call", c('v'))]);
                 }
                 out.extend([b("Add people", c('g')), b("Catch up", c('r')), b("Details", c('i')), b(if self.maximised { "Restore" } else { "Maximise" }, c('x'))]);
             }

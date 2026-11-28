@@ -450,7 +450,6 @@ pub fn build(state: &mut State) -> Snapshot {
         snap.call_members = call.heard().into_iter().map(|(number, name, key, removable)| CallMember { number: number as i32, name: name.into(), removable, talking: key.is_some_and(|key| call.is_talking(&key)) }).collect();
         snap.call.live = true;
         snap.call.muted = call.muted();
-        snap.call.can_camera = call.video.is_some() || !call.in_conference();
         snap.control = call.control_state();
         let control = &snap.control;
         snap.call.control_asking = control.asking.clone().unwrap_or_default().into();

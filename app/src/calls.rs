@@ -687,6 +687,8 @@ struct GroupRing {
     name: String,
     /// The conference they're rung into: this side alone so far.
     roster: Roster,
+    /// A video call: the camera's turned on once the first answers.
+    video: bool,
     /// Each of them rung: their name, their devices, the ringing task.
     rings: Vec<(String, Vec<String>, tokio::task::JoinHandle<()>)>,
 }
@@ -1436,7 +1438,9 @@ impl Calls {
     /// those of them not in it are rung into it, as Add to call does.
     /// Anyone in it who isn't a contact can't be rung from here (they're
     /// reached through someone in the call who knows both, once there).
-    pub fn call_group(&mut self, node: &NodeHandle, sidebar: &Sidebar, name: &str, rows: &[&PeerRow]) -> Note {
+    /// A video call (`video`) rings the same way and turns the camera on
+    /// once the first answers, as Camera in a voice call does.
+    pub fn call_group(&mut self, node: &NodeHandle, sidebar: &Sidebar, name: &str, rows: &[&PeerRow], video: bool) -> Note {
         if self.active.is_some() {
             let addable: Vec<&PeerRow> = rows.iter().copied().filter(|row| self.why_not_add(node, row).is_none()).collect();
             if addable.is_empty() {
@@ -1476,8 +1480,8 @@ impl Calls {
             });
             rings.push((row.handle.clone(), devices, task));
         }
-        self.group_ring = Some(GroupRing { name: name.to_string(), roster, rings });
-        Note::info(format!("calling {name}..."))
+        self.group_ring = Some(GroupRing { name: name.to_string(), roster, video, rings });
+        Note::info(format!("{} {name}...", if video { "video calling" } else { "calling" }))
     }
 
     /// One rung by a group's call, before anyone's answered, has said no
@@ -1616,7 +1620,8 @@ impl Calls {
                             }
                         }
                     }
-                    return Some(note);
+                    let video_note = if ring.video && self.active.is_some() { self.start_video_now(node, sidebar, true) } else { None };
+                    return Some(video_note.unwrap_or(note));
                 }
                 let Some(conference) = self.active.as_mut().and_then(|a| a.conference.as_mut()) else {
                     let _ = link.hang_up();
@@ -2058,9 +2063,6 @@ impl Calls {
         let active = self.active.as_ref().ok_or("there's no call")?;
         if active.video.is_some() {
             return Ok(());
-        }
-        if active.in_conference() {
-            return Err("a conference's video is started by whoever began it".to_string());
         }
         if let Some((who, why)) = active.links.iter().find_map(|l| sidebar.peer_by_name(&l.name).and_then(|row| video_blocked_by_cover(node, row)).map(|why| (l.shown.clone(), why))) {
             return Err(format!("can't add video with {who}: {why}"));

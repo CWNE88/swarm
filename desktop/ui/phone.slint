@@ -230,6 +230,7 @@ export component PhoneWindow inherits Window {
                     if open && view == Pane.peer && App.call.text == "": BarButton { text: "Call"; why: App.call.call-why; clicked => { App.place-call(false); } }
                     if open && view == Pane.peer && App.call.text == "": BarButton { text: "Video"; why: App.call.video-why; clicked => { App.place-call(true); } }
                     if open && view == Pane.channel: BarButton { text: "Call"; clicked => { App.place-call(false); } }
+                    if open && view == Pane.channel && App.call.text == "": BarButton { text: "Video"; clicked => { App.place-call(true); } }
                     if open && view == Pane.channel: BarButton { text: "Add"; clicked => { picking = 2; } }
                     if open && view == Pane.peer && App.call.add-to-call != "": BarButton { text: "Add to call"; why: App.call.call-why; clicked => { App.place-call(false); } }
                 }
@@ -623,7 +624,6 @@ export component PhoneWindow inherits Window {
             if call-on: CallButton { on-dark: true; sides: 6px; text: "Microphone"; tone: App.call.muted ? 0 : 3; clicked => { App.toggle-mute(); last-touch = animation-tick(); } }
             if call-on: CallButton {
                 on-dark: true; sides: 6px; text: "Camera"; tone: App.call.local-on ? 3 : 0;
-                why: App.call.can-camera || App.call.local-on ? "" : "A conference's video is started by whoever began it.";
                 clicked => {
                     if (App.call-cameras.length > 1) {
                         camera-menu-x = self.absolute-position.x; camera-menu-y = self.absolute-position.y; camera-menu-w = self.width;

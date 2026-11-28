@@ -1110,7 +1110,7 @@ impl State {
                     return;
                 }
                 if let Some(Entry::Channel(row)) = self.selected_entry().cloned() {
-                    let note = self.calls.call_group(&node, &self.sidebar, &row.name, &swarm_app::calls::group_contacts(&node, &self.sidebar, &row.id));
+                    let note = self.calls.call_group(&node, &self.sidebar, &row.name, &swarm_app::calls::group_contacts(&node, &self.sidebar, &row.id), video);
                     self.say(note);
                     return;
                 }

@@ -582,13 +582,14 @@ impl App {
             }
             return;
         }
-        if matches!(key.code, KeyCode::Char('c' | 'C')) && matches!(self.mode, MainMode::View | MainMode::Peers) && self.selected_channel().is_some() {
+        let group_video = matches!(key.code, KeyCode::Char('v' | 'V')) && !self.calls.busy();
+        if (matches!(key.code, KeyCode::Char('c' | 'C')) || group_video) && matches!(self.mode, MainMode::View | MainMode::Peers) && self.selected_channel().is_some() {
             let id = self.selected_channel().cloned().expect("checked");
             let name = match self.sidebar.rows.get(self.selected) {
                 Some(SidebarEntry::Channel(row)) => row.name.clone(),
                 _ => String::new(),
             };
-            let note = self.calls.call_group(&self.node, &self.sidebar, &name, &swarm_app::calls::group_contacts(&self.node, &self.sidebar, &id));
+            let note = self.calls.call_group(&self.node, &self.sidebar, &name, &swarm_app::calls::group_contacts(&self.node, &self.sidebar, &id), group_video);
             self.note(Some(note));
             return;
         }

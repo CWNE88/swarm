@@ -470,8 +470,8 @@ export component AppWindow inherits Window {
                                     stage-row := HorizontalLayout {
                                         padding: 8px; spacing: 6px; alignment: center;
                                         if call-on: CallButton { on-dark: true; sides: 10px; text: "Microphone"; shortcut: "m"; tone: App.call.muted ? 0 : 3; clicked => { App.toggle-mute(); focus-keys(); } }
-                                        if call-on: CallButton { on-dark: true; sides: 10px; text: "Camera"; shortcut: "w"; tone: App.call.local-on ? 3 : 0; why: App.call.can-camera || App.call.local-on ? "" : "A conference's video is started by whoever began it."; clicked => { App.toggle-camera(); focus-keys(); } }
-                                        if call-on: CallButton { on-dark: true; sides: 10px; text: "Share screen"; shortcut: "e"; tone: App.call.sharing ? 3 : 0; why: App.call.can-camera || video-shown ? "" : "A conference's video is started by whoever began it."; clicked => { App.toggle-screen(); focus-keys(); } }
+                                        if call-on: CallButton { on-dark: true; sides: 10px; text: "Camera"; shortcut: "w"; tone: App.call.local-on ? 3 : 0; clicked => { App.toggle-camera(); focus-keys(); } }
+                                        if call-on: CallButton { on-dark: true; sides: 10px; text: "Share screen"; shortcut: "e"; tone: App.call.sharing ? 3 : 0; clicked => { App.toggle-screen(); focus-keys(); } }
                                         if call-on && (App.call.can-control || App.call.control-state != Controlling.no): CallButton {
                                             on-dark: true; sides: 10px;
                                             text: "Control"; tone: App.call.control-state == Controlling.asking ? 1 : App.call.control-state != Controlling.no ? 3 : 0;
@@ -586,6 +586,7 @@ export component AppWindow inherits Window {
                                 name: App.channel.name;
                                 detail: App.channel.detail;
                                 Button { text: "Call"; clicked => { App.place-call(false); focus-keys(); } }
+                                if App.call.text == "": Button { text: "Video call"; clicked => { App.place-call(true); focus-keys(); } }
                                 Button { text: "Add people…"; clicked => { picking = 2; } }
                                 Button { text: "Catch up"; clicked => { App.refresh(); focus-keys(); } }
                                 Button { text: "Details"; clicked => { go(Pane.peers); } }

@@ -43,7 +43,6 @@ pub struct Showing {
     pub pd_request: bool,
     pub call_live: bool,
     pub calling_out: bool,
-    pub can_camera: bool,
     pub muted: bool,
     pub sharing: bool,
     /// The chat open is with someone who can be added to the call.
@@ -77,7 +76,6 @@ impl Showing {
             dd_relay: app.get_dd().relay,
             call_live: app.get_call().live,
             calling_out: app.get_call().calling_out,
-            can_camera: app.get_call().can_camera,
             muted: app.get_call().muted,
             sharing: app.get_call().sharing,
             can_add: !app.get_call().add_to_call.is_empty(),
@@ -262,7 +260,11 @@ pub fn keys(s: &Showing) -> Keys {
             t.key("d", "delete after…", C::NextTimer).key("g", "start a group", C::AddPeople);
         }
         Pane::Channel => {
-            t.named("Enter", enter(), "write", C::Write).key("c", "call", C::Call).key("g", "add people", C::AddPeople).key("r", "catch up", C::Refresh);
+            t.named("Enter", enter(), "write", C::Write).key("c", "call", C::Call);
+            if !s.call_live && !s.calling_out {
+                t.key("v", "video call", C::VideoCall);
+            }
+            t.key("g", "add people", C::AddPeople).key("r", "catch up", C::Refresh);
         }
         Pane::Request => {
             t.key("a", "add", C::AddRequest).quiet(enter(), C::AddRequest).key("x", "dismiss", C::DismissRequest).key("b", "block", C::BlockRequest);
@@ -294,10 +296,8 @@ pub fn keys(s: &Showing) -> Keys {
                 t.quiet("c", C::Call);
             }
         }
-        t.maybe(hinted && s.can_camera, "w", "camera", C::Camera);
-        if s.video_shown || s.can_camera {
-            t.maybe(hinted, "e", if s.sharing { "stop sharing" } else { "share screen" }, C::ShareScreen);
-        }
+        t.maybe(hinted, "w", "camera", C::Camera);
+        t.maybe(hinted, "e", if s.sharing { "stop sharing" } else { "share screen" }, C::ShareScreen);
     } else if s.calling_out {
         t.maybe(hinted, "h", "cancel the call", C::HangUp);
     } else if s.view == Pane::Peer {
@@ -335,7 +335,7 @@ mod tests {
     use KeyCommand as C;
 
     fn peer() -> Showing {
-        Showing { view: Pane::Peer, can_camera: true, can_call: true, can_video: true, ..Default::default() }
+        Showing { view: Pane::Peer, can_call: true, can_video: true, ..Default::default() }
     }
 
     #[test]
@@ -424,8 +424,8 @@ mod tests {
         let video = keys(&Showing { call_live: true, video_shown: true, ..peer() });
         assert_eq!(video.command("v"), C::VideoOnly);
         assert_eq!(keys(&peer()).command("v"), C::VideoCall);
-        let conference = keys(&Showing { call_live: true, can_camera: false, ..peer() });
-        assert!(!conference.hints().iter().any(|h| h.key == "w"));
+        assert_eq!(keys(&Showing { view: Pane::Channel, ..Default::default() }).command("v"), C::VideoCall, "a group's video call");
+        assert_eq!(keys(&Showing { view: Pane::Channel, call_live: true, video_shown: true, ..Default::default() }).command("v"), C::VideoOnly, "in one, full screen");
         assert_eq!(keys(&Showing { view: Pane::Channels, ..Default::default() }).command("w"), C::Preview);
     }
 

@@ -210,7 +210,7 @@ fn the_phone_window_takes_one_thing_at_a_time() {
     }
     let chosen = |on: bool| {
         cameras(&["Selfie", "Back"]);
-        app.set_call(swarm_desktop::CallShown { local_on: on, can_camera: true, ..app.get_call() });
+        app.set_call(swarm_desktop::CallShown { local_on: on, ..app.get_call() });
         draw(&window);
         pressed.borrow_mut().clear();
         let mut y = 860.0;
