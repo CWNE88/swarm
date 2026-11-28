@@ -1791,7 +1791,8 @@ impl NodeHandle {
     }
 }
 
-/// A message as it can be sent: not empty, not too long, one line.
+/// A message as it can be sent: not empty, not too long, no control
+/// characters but line breaks.
 fn check_message(text: &str) -> Result<String> {
     if text.trim().is_empty() {
         anyhow::bail!("nothing to send");
@@ -1799,7 +1800,7 @@ fn check_message(text: &str) -> Result<String> {
     if text.len() > protocol::MAX_MESSAGE_BYTES {
         anyhow::bail!("a message can be at most {} bytes", protocol::MAX_MESSAGE_BYTES);
     }
-    Ok(crate::text::single_line(text))
+    Ok(crate::text::message_text(text))
 }
 
 /// Puts a new message in `public_key`'s outbox and history, under the

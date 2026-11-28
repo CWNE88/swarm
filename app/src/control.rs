@@ -130,7 +130,7 @@ async fn handle_control_connection(stream: ipc::ServerStream, node: NodeHandle) 
         lines.push(line.trim_end().to_string());
     }
     let response = match (tag.trim_end(), lines.as_slice()) {
-        ("SEND", [name, text]) => match node.send_message(name, text).await {
+        ("SEND", [name, text]) => match node.send_message(name, &swarm_core::text::from_field(text)).await {
             Ok(Delivery::Delivered) => "OK delivered\n".to_string(),
             Ok(Delivery::Queued) => "OK queued\n".to_string(),
             Ok(Delivery::HeldUntilAdded) => "OK held\n".to_string(),
@@ -213,7 +213,7 @@ async fn handle_control_connection(stream: ipc::ServerStream, node: NodeHandle) 
                 Err(e) => format!("ERROR {e:#}\n"),
             }
         }
-        ("GROUP_POST", [tag, owner, text]) => group_said(tag, owner, |id| node.post_to_channel(&id, text)),
+        ("GROUP_POST", [tag, owner, text]) => group_said(tag, owner, |id| node.post_to_channel(&id, &swarm_core::text::from_field(text))),
         ("GROUP_ADD", [tag, owner, contact]) => group_said(tag, owner, |id| node.add_to_group(&id, contact)),
         ("GROUP_NAME", [tag, owner, name]) => group_said(tag, owner, |id| node.rename_group(&id, name)),
         ("GROUP_LEAVE", [tag, owner]) => group_said(tag, owner, |id| node.leave_group(&id)),

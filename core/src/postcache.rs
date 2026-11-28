@@ -108,7 +108,7 @@ pub fn merge_if(dir: &Path, author: &[u8; 32], fetched: &[Post], wanted: impl Fn
 
 fn format_line(post: &Post) -> String {
     use base64::{engine::general_purpose::STANDARD, Engine as _};
-    format!("{}\t{}\t{}\t{}\n", post.created_at, post.visibility.as_str(), STANDARD.encode(post.signature), post.text)
+    format!("{}\t{}\t{}\t{}\n", post.created_at, post.visibility.as_str(), STANDARD.encode(post.signature), crate::text::to_field(&post.text))
 }
 
 fn parse_line(line: &str) -> Option<Post> {
@@ -119,7 +119,7 @@ fn parse_line(line: &str) -> Option<Post> {
     let created_at = parts.next()?.parse().ok()?;
     let visibility = Visibility::parse(parts.next()?);
     let signature: [u8; 64] = STANDARD.decode(parts.next()?).ok()?.try_into().ok()?;
-    let text = parts.next()?.to_string();
+    let text = crate::text::from_field(parts.next()?);
     Some(Post { created_at, visibility, signature, text })
 }
 

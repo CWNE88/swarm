@@ -409,7 +409,7 @@ pub(crate) fn run_group_post(identity: Identity, given: String, text: String) ->
     let me = identity.public_key_bytes();
     let id = find_group(&me, &given)?;
     let rt = tokio::runtime::Runtime::new()?;
-    let one_line = swarm_core::text::single_line(&text);
+    let one_line = swarm_core::text::to_field(&text);
     if let Some(response) = rt.block_on(ask_node(&format!("GROUP_POST\n{}\n{}\n{one_line}\n", id.name, STANDARD.encode(id.owner)))) {
         return match response.lines().next().unwrap_or_default().strip_prefix("ERROR ") {
             Some(e) => Err(anyhow::anyhow!("{e}")),
@@ -640,7 +640,7 @@ pub(crate) fn run_send(identity: Identity, peer_name: String, message: String, p
     let peer = find_peer(&peers_path, &peer_name)?;
     let rt = tokio::runtime::Runtime::new()?;
     let delivery = rt.block_on(async {
-        match ask_node(&format!("SEND\n{}\n{}\n", peer.handle(), swarm_core::text::single_line(&message))).await {
+        match ask_node(&format!("SEND\n{}\n{}\n", peer.handle(), swarm_core::text::to_field(&message))).await {
             Some(response) => match response.trim_end() {
                 "OK delivered" => Ok(Delivery::Delivered),
                 "OK queued" => Ok(Delivery::Queued),

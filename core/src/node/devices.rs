@@ -453,7 +453,7 @@ pub(super) fn carbon(ctx: &Ctx, peer: [u8; 32], id: crate::outbox::MessageId, se
     if others.is_empty() || peer == me(ctx) {
         return;
     }
-    let line = format!("{}\t{}\t{}\t{at}\t{expires}\t{}", STANDARD.encode(peer), crate::outbox::format_id(&id), if sent { ">" } else { "<" }, crate::text::single_line(text));
+    let line = format!("{}\t{}\t{}\t{at}\t{expires}\t{}", STANDARD.encode(peer), crate::outbox::format_id(&id), if sent { ">" } else { "<" }, crate::text::to_field(text));
     let guard = crate::store::lock();
     for device in others {
         let _ = crate::store::append_line(&carbon_queue(ctx, &device), &line);
@@ -474,7 +474,7 @@ fn carbon_for(ctx: &Ctx, who: &str, device: &[u8; 32], carbon: Notice) {
     }
     let line = match carbon {
         Notice::Carbon { peer, id, sent, at, expires, text } => {
-            format!("{}\t{}\t{}\t{at}\t{expires}\t{}", STANDARD.encode(peer), crate::outbox::format_id(&id), if sent { ">" } else { "<" }, crate::text::single_line(&text))
+            format!("{}\t{}\t{}\t{at}\t{expires}\t{}", STANDARD.encode(peer), crate::outbox::format_id(&id), if sent { ">" } else { "<" }, crate::text::to_field(&text))
         }
         Notice::Delivered { peer, id } => delivered_line(&peer, &id),
         Notice::Unsaid { peer, line, done } => unsaid_line(&peer, &line, done),
@@ -583,7 +583,7 @@ fn queued_carbons(ctx: &Ctx, device: &[u8; 32]) -> (Vec<Notice>, Vec<String>) {
             let sent = way == ">";
             let at = f.next()?.parse().ok()?;
             let expires = f.next()?.parse().ok()?;
-            Some(Notice::Carbon { peer, id, sent, at, expires, text: f.next()?.to_string() })
+            Some(Notice::Carbon { peer, id, sent, at, expires, text: crate::text::from_field(f.next()?) })
         })
         .collect();
     (notices, lines)

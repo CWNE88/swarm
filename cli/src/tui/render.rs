@@ -1101,14 +1101,14 @@ pub(super) fn prompt_keys(app: &App) -> Option<String> {
         "Esc: cancel   Enter: save".to_string()
     } else if let Some(compose) = &app.post_compose {
         match compose {
-            PostCompose::Text => "Esc: cancel   Enter: continue".to_string(),
+            PostCompose::Text => "Esc: cancel   Enter: continue   Alt+Enter: new line".to_string(),
             PostCompose::AskVisibility(_) => "Esc: cancel   y: anyone   n: contacts only".to_string(),
         }
     } else if app.focus == Focus::Input && app.selected_channel().is_some() && app.mode == MainMode::View {
-        "Esc: stop typing   Enter: send   /help: commands".to_string()
+        "Esc: stop typing   Enter: send   Alt+Enter: new line   /help: commands".to_string()
     } else if app.focus == Focus::Input {
         if app.selected_peer().is_some() && app.mode == MainMode::View {
-            "Esc: stop typing   Enter: send   Tab: posts".to_string()
+            "Esc: stop typing   Enter: send   Alt+Enter: new line   Tab: posts".to_string()
         } else {
             "Esc: stop typing   Enter: send".to_string()
         }

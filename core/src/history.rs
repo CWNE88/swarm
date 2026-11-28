@@ -165,7 +165,7 @@ pub fn append_message(dir: &Path, public_key: &[u8; 32], direction: Direction, t
 
 /// `append_message`, with the store's lock already held.
 fn append_held(dir: &Path, public_key: &[u8; 32], direction: Direction, text: &str, at: u64, expires: u64, id: Option<MessageId>) -> std::io::Result<()> {
-    let entry = Entry { at: believable(at), direction, text: crate::text::single_line(text), expires, id };
+    let entry = Entry { at: believable(at), direction, text: crate::text::message_text(text), expires, id };
     let path = peerstore::file_for(dir, public_key);
     let line = format_line(&entry);
     if is_late(entry.at, unix_now()) && path.exists() {
@@ -193,8 +193,8 @@ fn unix_now() -> u64 {
 /// One line of the file, as `parse_line` reads it.
 pub(crate) fn format_line(e: &Entry) -> String {
     match e.id {
-        Some(id) => format!("{}\t{}\t{}\t{}\t{}", e.at, e.direction.tag(), e.expires, crate::outbox::format_id(&id), e.text),
-        None => format!("{}\t{}\t{}\t{}", e.at, e.direction.tag(), e.expires, e.text),
+        Some(id) => format!("{}\t{}\t{}\t{}\t{}", e.at, e.direction.tag(), e.expires, crate::outbox::format_id(&id), crate::text::to_field(&e.text)),
+        None => format!("{}\t{}\t{}\t{}", e.at, e.direction.tag(), e.expires, crate::text::to_field(&e.text)),
     }
 }
 
@@ -245,7 +245,7 @@ fn believable(at: u64) -> u64 {
 /// Whether it was added.
 pub fn append_new(dir: &Path, public_key: &[u8; 32], direction: Direction, text: &str, at: u64, expires: u64, id: Option<MessageId>) -> std::io::Result<bool> {
     let _guard = store::lock();
-    let text = crate::text::single_line(text);
+    let text = crate::text::message_text(text);
     let at = believable(at);
     let there = KEPT.with(&peerstore::file_for(dir, public_key), parse_line, |all| {
         all.iter().rev().take(500).any(|e| e.at == at && e.direction == direction && e.text == text)
@@ -336,7 +336,7 @@ pub(crate) fn parse_line(line: &str) -> Option<Entry> {
         [expires, id, text] => (expires.parse().ok()?, Some(crate::outbox::parse_id(id)?), text),
         _ => return None,
     };
-    Some(Entry { at, direction, text: text.to_string(), expires, id })
+    Some(Entry { at, direction, text: crate::text::from_field(text), expires, id })
 }
 
 #[cfg(test)]
@@ -352,6 +352,19 @@ mod tests {
         let entries = all(&dir, &[7; 32]).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].direction, Direction::Received);
+        assert_eq!(entries[0].text, "hi\n1700000000 > I never said this", "the line break kept, as the message's own");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_message_over_several_lines_is_kept_as_written() {
+        let dir = std::env::temp_dir().join(format!("swarm-history-test-lines-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        append(&dir, &[7; 32], Direction::Sent, "first\nsecond\n\nfourth", 1_700_000_001).unwrap();
+        append(&dir, &[7; 32], Direction::Received, "next", 1_700_000_002).unwrap();
+        let entries = all(&dir, &[7; 32]).unwrap();
+        assert_eq!(entries.iter().map(|e| e.text.as_str()).collect::<Vec<_>>(), ["first\nsecond\n\nfourth", "next"]);
+        assert!(!append_new(&dir, &[7; 32], Direction::Sent, "first\r\nsecond\n\nfourth", 1_700_000_001, 0, None).unwrap(), "the same message, come another way");
         fs::remove_dir_all(&dir).unwrap();
     }
     use std::path::PathBuf;

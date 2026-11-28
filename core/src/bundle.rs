@@ -167,7 +167,7 @@ fn merge_history(paths: &Paths, key: &[u8; 32], lines: &[String]) -> std::io::Re
     let before = all.len();
     for line in lines {
         let Some(mut entry) = history::parse_line(line) else { continue };
-        entry.text = crate::text::single_line(&entry.text);
+        entry.text = crate::text::message_text(&entry.text);
         if seen.insert(same(&entry)) {
             all.push((entry.at, history::format_line(&entry)));
         }

@@ -128,11 +128,11 @@ async fn message_is_delivered_and_acked() {
 }
 
 #[tokio::test]
-async fn a_message_with_control_characters_arrives_on_one_line() {
+async fn a_message_keeps_its_line_breaks_and_loses_other_control_characters() {
     let (mut dialer, mut acceptor) = pair().await;
-    request(&mut dialer, Request::Message { id: [1; 16], sent_at: 1, lifetime: 0, text: "one\ntwo\x1b[2J".to_string() }).await.unwrap();
+    request(&mut dialer, Request::Message { id: [1; 16], sent_at: 1, lifetime: 0, text: "one\r\ntwo\x1b[2J\tthree".to_string() }).await.unwrap();
     match recv(&mut acceptor).await.unwrap() {
-        Incoming::Request(_, Request::Message { text, .. }) => assert_eq!(text, "one two [2J"),
+        Incoming::Request(_, Request::Message { text, .. }) => assert_eq!(text, "one\ntwo [2J three"),
         other => panic!("expected a message, got {other:?}"),
     }
 }

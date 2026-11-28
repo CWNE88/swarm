@@ -6,8 +6,8 @@
 //!
 //! One flat file per peer, named by the peer's public key (see
 //! `peerstore` for why never by name), one message per line:
-//! `<sent_at>\t<id>\t<lifetime>\t<text>`, the text kept to one line (see
-//! `text`), `lifetime` how long it lasts once sent (see `disappearing`;
+//! `<sent_at>\t<id>\t<lifetime>\t<text>`, the text's line breaks kept on
+//! the one line (see `text::to_field`), `lifetime` how long it lasts once sent (see `disappearing`;
 //! 0, for good) — one whose time is up before it's delivered isn't.
 //! Every message has a random `MessageId`, carried on the wire too, so
 //! the receiver can drop a copy it already has (a resend after a lost
@@ -61,8 +61,9 @@ pub struct QueuedMessage {
 }
 
 /// Appends `message` (as `id`) to `public_key`'s outbox, creating the
-/// directory and file as needed. Control characters in the text become
-/// spaces (see `text`), so it can't spill onto a second line.
+/// directory and file as needed. Control characters in the text but
+/// line breaks become spaces, and those are kept on the one line (see
+/// `text::to_field`).
 ///
 /// `sent_at` is caller-supplied rather than computed here so the exact
 /// same value can also be used for the wire send and the sender's own
@@ -74,7 +75,7 @@ pub fn enqueue(dir: &Path, public_key: &[u8; 32], id: MessageId, message: &str, 
 }
 
 fn format_line(id: MessageId, sent_at: u64, lifetime: u64, message: &str) -> String {
-    format!("{sent_at}\t{}\t{lifetime}\t{}", format_id(&id), text::single_line(message))
+    format!("{sent_at}\t{}\t{lifetime}\t{}", format_id(&id), text::to_field(message))
 }
 
 /// Drops every queued message in `dir` whose time is up by `now`, not
@@ -116,7 +117,7 @@ fn parse_line(line: &str) -> Option<QueuedMessage> {
     let sent_at = fields.next()?.parse().ok()?;
     let id = parse_id(fields.next()?)?;
     let lifetime = fields.next()?.parse().ok()?;
-    let text = fields.next()?.to_string();
+    let text = crate::text::from_field(fields.next()?);
     Some(QueuedMessage { id, sent_at, lifetime, text })
 }
 
@@ -184,7 +185,7 @@ mod tests {
         enqueue(&dir, &BOB, [1; 16], "first", 1_700_000_000, 0).unwrap();
         enqueue(&dir, &BOB, [2; 16], "second\nwith a newline", 1_700_000_005, 0).unwrap();
         let queued = pending(&dir, &BOB).unwrap();
-        assert_eq!(texts(&queued), vec!["first", "second with a newline"]);
+        assert_eq!(texts(&queued), vec!["first", "second\nwith a newline"]);
         assert_eq!(queued.iter().map(|m| (m.id, m.sent_at)).collect::<Vec<_>>(), vec![([1; 16], 1_700_000_000), ([2; 16], 1_700_000_005)]);
         assert_eq!(pending(&dir, &ALICE).unwrap(), Vec::new());
         fs::remove_dir_all(&dir).unwrap();

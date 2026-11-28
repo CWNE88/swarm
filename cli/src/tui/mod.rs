@@ -190,7 +190,7 @@ pub async fn run(
 ) -> Result<()> {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableFocusChange);
+        let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableFocusChange, crossterm::event::DisableBracketedPaste);
         let _ = ratatui::try_restore();
         restore_stderr();
         default_hook(info);
@@ -198,12 +198,12 @@ pub async fn run(
 
     let result = match ratatui::try_init() {
         Ok(mut terminal) => {
-            let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableFocusChange);
+            let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableFocusChange, crossterm::event::EnableBracketedPaste);
             run_app(&mut terminal, node, peers_path, backend_error, call_events).await
         }
         Err(e) => Err(e.into()),
     };
-    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableFocusChange);
+    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableFocusChange, crossterm::event::DisableBracketedPaste);
     let _ = ratatui::try_restore();
     restore_stderr();
     result
@@ -295,6 +295,7 @@ async fn run_app(
             maybe_event = input_rx.recv() => {
                 match maybe_event {
                     Some(CEvent::Key(key)) => app.handle_key(key).await,
+                    Some(CEvent::Paste(text)) => app.handle_paste(&text),
                     Some(CEvent::FocusGained) => (app.in_use, app.left) = (true, false),
                     Some(CEvent::FocusLost) => (app.in_use, app.left) = (false, true),
                     Some(_) => {}

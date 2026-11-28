@@ -619,7 +619,7 @@ pub(super) fn decode_notice(tag: u8, r: &mut Reader) -> Result<Option<Frame>> {
                 bail!("message longer than {MAX_MESSAGE_BYTES} bytes");
             }
             let expires = r.u64()?;
-            Frame::Notice(Notice::Carbon { peer, id, sent, at, expires, text: crate::text::single_line(&text) })
+            Frame::Notice(Notice::Carbon { peer, id, sent, at, expires, text: crate::text::message_text(&text) })
         }
         TAG_DELIVERED => Frame::Notice(Notice::Delivered { peer: r.array()?, id: r.array()? }),
         TAG_UNSAID => {

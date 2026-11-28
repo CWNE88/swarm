@@ -32,7 +32,7 @@ pub struct Waiting {
 }
 
 fn format_line(w: &Waiting) -> String {
-    format!("{}\t{}\t{}\t{}", w.at, format_id(&w.id), w.expires, crate::text::single_line(&w.text))
+    format!("{}\t{}\t{}\t{}", w.at, format_id(&w.id), w.expires, crate::text::to_field(&w.text))
 }
 
 fn parse_line(line: &str) -> Option<Waiting> {
@@ -40,7 +40,7 @@ fn parse_line(line: &str) -> Option<Waiting> {
     let at = f.next()?.parse().ok()?;
     let id = parse_id(f.next()?)?;
     let expires = f.next()?.parse().ok()?;
-    Some(Waiting { id, at, expires, text: f.next()?.to_string() })
+    Some(Waiting { id, at, expires, text: crate::text::from_field(f.next()?) })
 }
 
 /// Notes message `id`, sent to `key` at `at`, as waiting, unless it's

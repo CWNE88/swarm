@@ -981,6 +981,10 @@ impl App {
                 self.focus = Focus::Nav;
                 self.input.clear();
             }
+            KeyCode::Enter if key.modifiers.intersects(KeyModifiers::ALT | KeyModifiers::SHIFT) => {
+                self.picked = None;
+                lineedit::insert(&mut self.input, &mut self.input_back, "\n");
+            }
             KeyCode::Enter => {
                 self.picked = None;
                 self.send_current_input().await;
@@ -990,6 +994,25 @@ impl App {
                 lineedit::edit(&mut self.input, &mut self.input_back, key);
             }
         }
+    }
+
+    /// Text pasted (the terminal marks it as pasted, so its line breaks
+    /// don't arrive as Enter): into what's being typed, its line breaks
+    /// kept in a message or post, made spaces anywhere else.
+    pub(super) fn handle_paste(&mut self, pasted: &str) {
+        let pasted = pasted.trim_end_matches(['\r', '\n']);
+        if let Some((typed, _)) = self.locked.as_mut() {
+            typed.push_str(&swarm_core::text::single_line(pasted));
+            return;
+        }
+        if self.focus != Focus::Input || matches!(self.post_compose, Some(PostCompose::AskVisibility(_))) {
+            return;
+        }
+        let lines_kept = self.typing_a_message() || self.post_compose.is_some();
+        let text = if lines_kept { swarm_core::text::message_text(pasted) } else { swarm_core::text::single_line(pasted) };
+        self.picked = None;
+        self.picked_post = None;
+        lineedit::insert(&mut self.input, &mut self.input_back, &text);
     }
 
     /// Whether what's typed is a message, to a contact or in a channel
@@ -1044,6 +1067,11 @@ impl App {
                     self.focus = Focus::Nav;
                     self.input.clear();
                     self.set_status(StatusKind::Info, "cancelled");
+                }
+                KeyCode::Enter if key.modifiers.intersects(KeyModifiers::ALT | KeyModifiers::SHIFT) => {
+                    self.picked_post = None;
+                    lineedit::insert(&mut self.input, &mut self.input_back, "\n");
+                    self.post_compose = Some(PostCompose::Text);
                 }
                 KeyCode::Enter => {
                     self.picked_post = None;

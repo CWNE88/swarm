@@ -531,10 +531,10 @@ fn channel_post_signable_bytes(channel: &ChannelId, author: [u8; 32], created_at
 
 /// Signs `text` as a post to `channel`, under `name` (the author's
 /// current display name, if they have one). Control characters in the
-/// text become spaces first (see `crate::text`), since a post is stored
-/// one per line; a name that isn't a valid display name is left off.
+/// text but line breaks become spaces first (see `crate::text`); a name
+/// that isn't a valid display name is left off.
 pub fn sign_channel_post(channel: &ChannelId, identity: &Identity, text: &str, name: Option<&str>) -> ChannelPost {
-    let text = crate::text::single_line(text);
+    let text = crate::text::message_text(text);
     let name = name.filter(|n| crate::displayname::is_valid_name(n)).map(str::to_string);
     let created_at = unix_now();
     let author = identity.public_key_bytes();
@@ -542,11 +542,11 @@ pub fn sign_channel_post(channel: &ChannelId, identity: &Identity, text: &str, n
     ChannelPost { author, created_at, text, name, signature }
 }
 
-/// Checks the signature (and that the text is one line, as every stored
-/// post has to be). Whether the author was in the group is the roster's
+/// Checks the signature (and that the text has no control characters
+/// but line breaks). Whether the author was in the group is the roster's
 /// to say (`Roster::wrote_as_member`, which `merge_posts` asks).
 pub fn verify_channel_post(channel: &ChannelId, post: &ChannelPost) -> bool {
-    crate::text::is_single_line(&post.text)
+    crate::text::is_message_text(&post.text)
         && post.text.len() <= crate::posts::MAX_POST_BYTES
         && post.name.as_deref().is_none_or(crate::displayname::is_valid_name)
         && identity::verify(&post.author, &channel_post_signable_bytes(channel, post.author, post.created_at, post.name.as_deref(), &post.text), &post.signature)
@@ -605,8 +605,8 @@ pub(crate) fn parse_roster_event(line: &str) -> Option<RosterEvent> {
 pub(crate) fn format_channel_post(post: &ChannelPost) -> String {
     let head = format!("{}\t{}\t{}", post.created_at, STANDARD.encode(post.author), STANDARD.encode(post.signature));
     match &post.name {
-        Some(name) => format!("{head}\t{name}\t{}\n", post.text),
-        None => format!("{head}\t{}\n", post.text),
+        Some(name) => format!("{head}\t{name}\t{}\n", crate::text::to_field(&post.text)),
+        None => format!("{head}\t{}\n", crate::text::to_field(&post.text)),
     }
 }
 
@@ -620,7 +620,7 @@ pub(crate) fn parse_channel_post(line: &str) -> Option<ChannelPost> {
     let created_at = parts[0].parse().ok()?;
     let author: [u8; 32] = STANDARD.decode(parts[1]).ok()?.try_into().ok()?;
     let signature: [u8; 64] = STANDARD.decode(parts[2]).ok()?.try_into().ok()?;
-    Some(ChannelPost { author, created_at, name, signature, text: text.to_string() })
+    Some(ChannelPost { author, created_at, name, signature, text: crate::text::from_field(text) })
 }
 
 /// Where `channel` lives on disk — or an error, never a path, for a tag
@@ -990,6 +990,23 @@ mod tests {
     }
 
     #[test]
+    fn a_post_over_several_lines_is_signed_stored_and_read_back_as_written() {
+        let ann = Identity::generate();
+        let (channel, _) = group(&ann);
+        let post = sign_channel_post(&channel, &ann, "one\r\ntwo\tthree", None);
+        assert_eq!(post.text, "one\ntwo three");
+        assert!(verify_channel_post(&channel, &post));
+        let line = format_channel_post(&post);
+        assert_eq!(line.matches('\n').count(), 1, "one line in the file");
+        let back = parse_channel_post(line.trim_end_matches('\n')).unwrap();
+        assert_eq!(back.text, "one\ntwo three");
+        assert!(verify_channel_post(&channel, &back));
+        let mut tabbed = post.clone();
+        tabbed.text = "one\ttwo".to_string();
+        assert!(!verify_channel_post(&channel, &tabbed), "other control characters still refused");
+    }
+
+    #[test]
     fn a_new_group_has_a_tag_of_its_own_that_is_safe_on_disk() {
         let me = Identity::generate();
         let (a, b) = (ChannelId::new_group(me.public_key_bytes()), ChannelId::new_group(me.public_key_bytes()));
@@ -1250,7 +1267,7 @@ mod tests {
         let ann = Identity::generate();
         let (channel, _) = group(&ann);
         let post = sign_channel_post(&channel, &ann, "hi\nthere", Some("Ann"));
-        assert_eq!(post.text, "hi there");
+        assert_eq!(post.text, "hi\nthere");
         assert!(verify_channel_post(&channel, &post));
         assert!(!verify_channel_post(&ChannelId::new_group(ann.public_key_bytes()), &post));
         let mut renamed = post.clone();

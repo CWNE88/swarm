@@ -73,10 +73,10 @@ impl Visibility {
 pub const MAX_POST_BYTES: usize = 2000;
 
 /// Whether `text` is acceptable as a post: not empty, not too long, and
-/// on one line (see `crate::text`). Part of `verify`, so a fetched post
+/// no control characters but line breaks (see `crate::text`). Part of `verify`, so a fetched post
 /// that fails this is dropped like one with a bad signature.
 pub fn is_valid_text(text: &str) -> bool {
-    !text.trim().is_empty() && text.len() <= MAX_POST_BYTES && crate::text::is_single_line(text)
+    !text.trim().is_empty() && text.len() <= MAX_POST_BYTES && crate::text::is_message_text(text)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -205,7 +205,7 @@ pub fn sweep_deletions(posts: &Path, now: u64) -> std::io::Result<bool> {
 /// Writes `posts` in time order.
 fn save(path: &Path, posts: &mut [Post]) -> std::io::Result<()> {
     posts.sort_by_key(|p| p.created_at);
-    let text: String = posts.iter().map(|p| format!("{}\t{}\t{}\t{}\n", p.created_at, p.visibility.as_str(), STANDARD.encode(p.signature), p.text)).collect();
+    let text: String = posts.iter().map(|p| format!("{}\t{}\t{}\t{}\n", p.created_at, p.visibility.as_str(), STANDARD.encode(p.signature), crate::text::to_field(&p.text))).collect();
     crate::store::write_atomic(path, text)
 }
 
@@ -262,16 +262,17 @@ fn signable_bytes(created_at: u64, visibility: Visibility, text: &str) -> Vec<u8
 /// Appends one post, signed with `identity`'s root key, creating
 /// `path`'s parent directory as needed.
 pub fn add(path: &Path, identity: &Identity, text: &str, visibility: Visibility) -> std::io::Result<()> {
+    let text = &crate::text::message_text(text);
     if !is_valid_text(text) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            format!("a post has to be 1 to {MAX_POST_BYTES} bytes on one line"),
+            format!("a post has to be 1 to {MAX_POST_BYTES} bytes"),
         ));
     }
     let created_at = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     let signature = identity.sign(&signable_bytes(created_at, visibility, text));
     let _guard = crate::store::lock();
-    crate::store::append_line(path, &format!("{created_at}\t{}\t{}\t{text}", visibility.as_str(), STANDARD.encode(signature)))
+    crate::store::append_line(path, &format!("{created_at}\t{}\t{}\t{}", visibility.as_str(), STANDARD.encode(signature), crate::text::to_field(text)))
 }
 
 /// Whether `post` was genuinely signed by whoever holds the private key
@@ -330,7 +331,7 @@ fn parse_line(line: &str) -> Option<Post> {
     let created_at = parts.next()?.parse().ok()?;
     let visibility = Visibility::parse(parts.next()?);
     let signature: [u8; 64] = STANDARD.decode(parts.next()?).ok()?.try_into().ok()?;
-    let text = parts.next()?.to_string();
+    let text = crate::text::from_field(parts.next()?);
     Some(Post { created_at, visibility, signature, text })
 }
 

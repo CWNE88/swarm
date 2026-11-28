@@ -231,14 +231,14 @@ pub(super) fn decode_request(tag: u8, r: &mut Reader) -> Result<Option<Frame>> {
                         bail!("message longer than {MAX_MESSAGE_BYTES} bytes");
                     }
                     let lifetime = r.u64()?;
-                    Request::Message { id: message_id, sent_at, lifetime, text: crate::text::single_line(&text) }
+                    Request::Message { id: message_id, sent_at, lifetime, text: crate::text::message_text(&text) }
                 }
                 TAG_PASS_ON => {
                     let (contact, message_id, sent_at, text) = (r.array()?, r.array()?, r.u64()?, r.str()?);
                     if text.len() > MAX_MESSAGE_BYTES {
                         bail!("message longer than {MAX_MESSAGE_BYTES} bytes");
                     }
-                    Request::PassOn { contact, id: message_id, sent_at, lifetime: r.u64()?, text: crate::text::single_line(&text) }
+                    Request::PassOn { contact, id: message_id, sent_at, lifetime: r.u64()?, text: crate::text::message_text(&text) }
                 }
                 TAG_LIST_POSTS => Request::ListPosts { since: r.u64()? },
                 TAG_PROFILE_ASK => Request::Profile { have: r.u64()?, from: r.u32()? },

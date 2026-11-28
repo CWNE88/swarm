@@ -83,6 +83,17 @@ pub fn edit(text: &mut String, back: &mut usize, key: KeyEvent) -> bool {
     true
 }
 
+/// Puts `s` (pasted, or a line break) in at the cursor, as much of it as
+/// fits under `MAX_CHARS`; the cursor ends after it.
+pub fn insert(text: &mut String, back: &mut usize, s: &str) {
+    let mut room = MAX_CHARS.saturating_sub(text.len());
+    let added: String = s.chars().take_while(|c| room.checked_sub(c.len_utf8()).map(|left| room = left).is_some()).collect();
+    let count = text.chars().count();
+    *back = (*back).min(count);
+    let at = text.char_indices().nth(count - *back).map_or(text.len(), |(i, _)| i);
+    text.insert_str(at, &added);
+}
+
 fn word_start(chars: &[char], mut at: usize) -> usize {
     while at > 0 && chars[at - 1].is_whitespace() {
         at -= 1;
@@ -103,17 +114,31 @@ fn word_end(chars: &[char], mut at: usize) -> usize {
     at
 }
 
-/// `text` cut into lines of `width` characters, and where the cursor
-/// falls (line, column). A cursor just past a full line goes to the
-/// start of the next, so there's always room to draw it.
+/// `text` cut into lines of `width` characters, and at its line breaks,
+/// and where the cursor falls (line, column). A cursor just past a full
+/// line goes to the start of the next, so there's always room to draw
+/// it (except on the line break after a full line, where it's just off
+/// the end).
 fn wrap(text: &str, back: usize, width: usize) -> (Vec<Vec<char>>, (usize, usize)) {
     let width = width.max(1);
     let chars: Vec<char> = text.chars().collect();
     let at = chars.len() - back.min(chars.len());
-    let mut lines: Vec<Vec<char>> = chars.chunks(width).map(<[char]>::to_vec).collect();
-    let cursor = (at / width, at % width);
-    if cursor.0 >= lines.len() {
-        lines.push(Vec::new());
+    let mut lines: Vec<Vec<char>> = vec![Vec::new()];
+    let mut cursor = (0, 0);
+    for (i, &c) in chars.iter().chain(std::iter::once(&'\0')).enumerate() {
+        let last = lines.len() - 1;
+        if lines[last].len() >= width && c != '\n' {
+            lines.push(Vec::new());
+        }
+        let last = lines.len() - 1;
+        if i == at {
+            cursor = (last, lines[last].len());
+        }
+        match c {
+            _ if i == chars.len() => {}
+            '\n' => lines.push(Vec::new()),
+            c => lines[last].push(c),
+        }
     }
     (lines, cursor)
 }
@@ -227,5 +252,28 @@ mod tests {
         assert_eq!(cursor, (1, 1));
         assert_eq!(lines_needed("", 10), 1);
         assert_eq!(lines_needed(&"x".repeat(100), 10), MAX_LINES);
+    }
+
+    #[test]
+    fn a_line_break_starts_a_new_line() {
+        let (lines, cursor) = wrap("ab\ncd", 0, 10);
+        assert_eq!(lines, vec![vec!['a', 'b'], vec!['c', 'd']]);
+        assert_eq!(cursor, (1, 2));
+        let (_, cursor) = wrap("ab\ncd", 3, 10);
+        assert_eq!(cursor, (0, 2), "on the break: the end of the line it ends");
+        let (lines, cursor) = wrap("ab\n", 0, 10);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(cursor, (1, 0));
+        assert_eq!(lines_needed("abc\nde", 3), 2, "a full line then a break takes no blank line");
+    }
+
+    #[test]
+    fn a_paste_goes_in_at_the_cursor_and_no_further_than_fits() {
+        let (mut text, mut back) = (String::from("one three"), 5);
+        insert(&mut text, &mut back, "two\nlines ");
+        assert_eq!((text.as_str(), back), ("one two\nlines three", 5));
+        let mut long = "x".repeat(MAX_CHARS - 1);
+        insert(&mut long, &mut 0, "éé");
+        assert_eq!(long.len(), MAX_CHARS - 1, "half a character never goes in");
     }
 }
